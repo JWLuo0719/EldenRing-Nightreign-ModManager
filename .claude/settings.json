@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npx tauri *)",
+      "Bash(cargo *)",
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(rm *)",
+      "Bash(powershell.exe *)",
+      "Bash(cmd.exe /c *)"
+    ]
+  }
+}

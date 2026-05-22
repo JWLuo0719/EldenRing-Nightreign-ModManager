@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+dist/
+app/src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Tauri
+app/src-tauri/gen/
+app/src-tauri/icons/
+
+# Mod files (large)
+mods/*.zip
+mods/*.7z
+mods/*.rar
+
+# ME3 tool
+me3/
+
+# Reference files
+reference/
+
+# Rust
+app/src-tauri/Cargo.lock
