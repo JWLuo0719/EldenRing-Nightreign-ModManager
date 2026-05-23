@@ -30,10 +30,8 @@ npm-debug.log*
 app/src-tauri/gen/
 app/src-tauri/icons/
 
-# Mod files (large)
-mods/*.zip
-mods/*.7z
-mods/*.rar
+# Mod files
+mods/
 
 # ME3 tool
 me3/
@@ -43,3 +41,5 @@ reference/
 
 # Rust
 app/src-tauri/Cargo.lock
+
+.agents/

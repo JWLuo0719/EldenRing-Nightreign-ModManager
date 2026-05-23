@@ -20,13 +20,18 @@ pub fn run() {
             mod_manager::toggle_mod,
             mod_manager::get_me3_path,
             mod_manager::set_me3_path,
+            mod_manager::get_launch_exe_path,
+            mod_manager::set_launch_exe_path,
+            mod_manager::get_mods_dir,
             mod_manager::launch_game,
+            mod_manager::generate_me3_profile,
             profile::get_profiles,
             profile::create_profile,
             profile::delete_profile,
             profile::activate_profile,
             profile::get_active_profile,
             profile::update_profile,
+            profile::update_active_profile_mod,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

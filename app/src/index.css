@@ -1,20 +1,20 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg-primary: #0f1015;
-  --color-bg-secondary: #1a1b23;
-  --color-bg-tertiary: #252730;
-  --color-bg-hover: #2a2d38;
-  --color-text-primary: #e4e4e7;
-  --color-text-secondary: #a1a1aa;
-  --color-text-muted: #71717a;
-  --color-accent: #c084fc;
-  --color-accent-hover: #d8b4fe;
-  --color-accent-dim: rgba(192, 132, 252, 0.15);
+  --color-bg-primary: #0b0e10;
+  --color-bg-secondary: #14181b;
+  --color-bg-tertiary: #20262a;
+  --color-bg-hover: #2a3237;
+  --color-text-primary: #f0ebe1;
+  --color-text-secondary: #b8b0a4;
+  --color-text-muted: #756f67;
+  --color-accent: #e9c46a;
+  --color-accent-hover: #f4d98a;
+  --color-accent-dim: rgba(233, 196, 106, 0.14);
   --color-border: #2e303a;
   --color-success: #4ade80;
   --color-warning: #fbbf24;
-  --color-danger: #f87171;
+  --color-danger: #e76f51;
 }
 
 * {
@@ -30,11 +30,23 @@ html, body, #root {
 }
 
 body {
-  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-family: "霞鹜文楷", "LXGW WenKai", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), transparent 76%);
 }
 
 ::-webkit-scrollbar {

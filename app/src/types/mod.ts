@@ -30,6 +30,7 @@ export interface ProfileMod {
 export interface AppConfig {
   gamePath: string;
   me3Path: string;
+  launchExePath: string;
   language: string;
   theme: string;
 }

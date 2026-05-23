@@ -10,14 +10,18 @@ pub struct Profile {
     pub description: String,
     pub icon: String,
     pub mods: Vec<ProfileMod>,
+    #[serde(rename = "isActive", alias = "is_active")]
     pub is_active: bool,
+    #[serde(rename = "createdAt", alias = "created_at")]
     pub created_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProfileMod {
+    #[serde(rename = "modId", alias = "mod_id")]
     pub mod_id: String,
     pub enabled: bool,
+    #[serde(rename = "loadOrder", alias = "load_order")]
     pub load_order: u32,
 }
 
@@ -64,7 +68,7 @@ pub fn get_profiles() -> Vec<Profile> {
     profiles
 }
 
-fn get_active_profile_id() -> Option<String> {
+pub fn get_active_profile_id() -> Option<String> {
     let path = get_active_profile_path();
     if path.exists() {
         fs::read_to_string(path).ok().map(|s| s.trim().to_string())
@@ -141,17 +145,56 @@ pub fn activate_profile(profile_id: String) -> Result<(), String> {
 #[command]
 pub fn get_active_profile() -> Option<Profile> {
     let active_id = get_active_profile_id()?;
-    let profiles_dir = get_profiles_dir();
-    let file_path = profiles_dir.join(format!("{}.json", active_id));
-
-    let content = fs::read_to_string(file_path).ok()?;
-    let mut profile: Profile = serde_json::from_str(&content).ok()?;
+    let mut profile = load_profile(&active_id).ok()?;
     profile.is_active = true;
     Some(profile)
 }
 
 #[command]
 pub fn update_profile(profile: Profile) -> Result<(), String> {
+    save_profile(&profile)
+}
+
+#[command]
+pub fn update_active_profile_mod(mod_id: String, enabled: bool) -> Result<Option<Profile>, String> {
+    let Some(mut profile) = get_active_profile() else {
+        return Ok(None);
+    };
+
+    if let Some(profile_mod) = profile.mods.iter_mut().find(|item| item.mod_id == mod_id) {
+        profile_mod.enabled = enabled;
+    } else {
+        let load_order = profile
+            .mods
+            .iter()
+            .map(|item| item.load_order)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        profile.mods.push(ProfileMod {
+            mod_id,
+            enabled,
+            load_order,
+        });
+    }
+
+    save_profile(&profile)?;
+    Ok(Some(profile))
+}
+
+pub fn load_profile(profile_id: &str) -> Result<Profile, String> {
+    let profiles_dir = get_profiles_dir();
+    let file_path = profiles_dir.join(format!("{}.json", profile_id));
+
+    if !file_path.exists() {
+        return Err("配置方案不存在".to_string());
+    }
+
+    let content = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+    serde_json::from_str::<Profile>(&content).map_err(|e| e.to_string())
+}
+
+pub fn save_profile(profile: &Profile) -> Result<(), String> {
     let profiles_dir = get_profiles_dir();
     let file_path = profiles_dir.join(format!("{}.json", profile.id));
 
