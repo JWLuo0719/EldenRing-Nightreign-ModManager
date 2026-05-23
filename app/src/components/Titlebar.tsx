@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface TitlebarProps {
@@ -8,120 +8,68 @@ interface TitlebarProps {
 export function Titlebar({ onSettingsClick }: TitlebarProps) {
   const appWindow = useMemo(() => getCurrentWindow(), []);
 
-  useEffect(() => {
-    const minimize = () => appWindow.minimize();
-    const maximize = () => appWindow.toggleMaximize();
-    const close = () => appWindow.close();
-
-    document
-      .getElementById("titlebar-minimize")
-      ?.addEventListener("click", minimize);
-    document
-      .getElementById("titlebar-maximize")
-      ?.addEventListener("click", maximize);
-    document
-      .getElementById("titlebar-close")
-      ?.addEventListener("click", close);
-
-    return () => {
-      document
-        .getElementById("titlebar-minimize")
-        ?.removeEventListener("click", minimize);
-      document
-        .getElementById("titlebar-maximize")
-        ?.removeEventListener("click", maximize);
-      document
-        .getElementById("titlebar-close")
-        ?.removeEventListener("click", close);
-    };
-  }, [appWindow]);
-
   return (
-    <div className="h-10 bg-bg-secondary flex items-center select-none shrink-0 border-b border-border">
-      <div
-        className="flex-1 flex items-center px-4 h-full"
-        data-tauri-drag-region
-      >
-        <div className="flex items-center gap-3">
-          <div className="w-6 h-6 rounded-lg bg-accent flex items-center justify-center text-xs font-bold text-bg-primary shadow-sm">
-            N
-          </div>
-          <span className="text-sm text-text-primary font-semibold tracking-wide">
-            夜临 Mod 管理器
-          </span>
+    <div className="flex h-10 shrink-0 select-none items-center border-b border-border bg-panel">
+      <div className="flex h-full flex-1 items-center gap-3 px-4" data-tauri-drag-region>
+        <div className="grid h-6 w-6 place-items-center rounded-md bg-accent text-xs font-black text-black">
+          N
         </div>
+        <span className="text-sm font-semibold text-text-primary">Nightreign Mod Manager</span>
       </div>
+
       <div className="flex h-full">
         {onSettingsClick && (
           <button
+            type="button"
             onClick={onSettingsClick}
-            className="w-11 h-full flex items-center justify-center hover:bg-bg-hover transition-colors text-text-secondary hover:text-text-primary"
+            className="grid h-full w-11 place-items-center text-text-muted transition-colors hover:bg-surface hover:text-text-primary"
             title="设置"
           >
-            <svg
-              className="w-4 h-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.32 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
-            </svg>
+            <SettingsIcon />
           </button>
         )}
         <button
-          id="titlebar-minimize"
-          className="w-11 h-full flex items-center justify-center hover:bg-bg-hover transition-colors"
+          type="button"
+          onClick={() => void appWindow.minimize()}
+          className="grid h-full w-11 place-items-center text-text-muted transition-colors hover:bg-surface hover:text-text-primary"
+          title="最小化"
         >
-          <svg
-            className="w-3.5 h-3.5 text-text-secondary"
-            viewBox="0 0 12 12"
-          >
-            <rect
-              x="1"
-              y="5.5"
-              width="10"
-              height="1"
-              fill="currentColor"
-            />
-          </svg>
+          <span className="h-px w-3.5 bg-current" />
         </button>
         <button
-          id="titlebar-maximize"
-          className="w-11 h-full flex items-center justify-center hover:bg-bg-hover transition-colors"
+          type="button"
+          onClick={() => void appWindow.toggleMaximize()}
+          className="grid h-full w-11 place-items-center text-text-muted transition-colors hover:bg-surface hover:text-text-primary"
+          title="最大化"
         >
-          <svg
-            className="w-3.5 h-3.5 text-text-secondary"
-            viewBox="0 0 12 12"
-          >
-            <rect
-              x="1.5"
-              y="1.5"
-              width="9"
-              height="9"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1"
-            />
-          </svg>
+          <span className="h-3.5 w-3.5 border border-current" />
         </button>
         <button
-          id="titlebar-close"
-          className="w-11 h-full flex items-center justify-center hover:bg-danger transition-colors group"
+          type="button"
+          onClick={() => void appWindow.close()}
+          className="grid h-full w-11 place-items-center text-text-muted transition-colors hover:bg-danger hover:text-white"
+          title="关闭"
         >
-          <svg
-            className="w-3.5 h-3.5 text-text-secondary group-hover:text-white"
-            viewBox="0 0 12 12"
-          >
-            <path
-              d="M2 2L10 10M10 2L2 10"
-              stroke="currentColor"
-              strokeWidth="1.2"
-            />
-          </svg>
+          <CloseIcon />
         </button>
       </div>
     </div>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.51 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.51 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.22.53.74.95 1.55.95H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <path d="M2 2l8 8M10 2l-8 8" />
+    </svg>
   );
 }

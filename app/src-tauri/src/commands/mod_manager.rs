@@ -1,6 +1,6 @@
 use super::profile;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -24,6 +24,9 @@ pub struct ModInfo {
     #[serde(rename = "type")]
     pub mod_type: String,
     pub files: Vec<String>,
+    pub source: String,
+    #[serde(rename = "configFiles")]
+    pub config_files: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,6 +35,44 @@ pub struct AppConfig {
     pub me3_path: String,
     #[serde(default)]
     pub launch_exe_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchArtifacts {
+    pub profile_path: String,
+    pub profile_content: String,
+    pub script_path: String,
+    pub script_content: String,
+    pub log_path: String,
+    pub log_content: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictOwner {
+    pub mod_id: String,
+    pub mod_name: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileConflict {
+    pub relative_path: String,
+    pub owners: Vec<ConflictOwner>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpecialModStatus {
+    pub game_path: String,
+    pub seamless_installed: bool,
+    pub onlinefix_installed: bool,
+    pub nighter_available: bool,
+    pub nighter_path: String,
+    pub nighter_config_path: String,
+    pub missing_game_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -45,6 +86,34 @@ struct NativeEntry {
     load_early: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct ExternalModsConfig {
+    #[serde(default)]
+    packages: Vec<ExternalModEntry>,
+    #[serde(default)]
+    natives: Vec<ExternalNativeEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ExternalModEntry {
+    path: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ExternalNativeEntry {
+    path: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    load_early: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 fn get_config_dir() -> PathBuf {
     let config_dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -55,6 +124,10 @@ fn get_config_dir() -> PathBuf {
 
 fn get_config_path() -> PathBuf {
     get_config_dir().join("config.json")
+}
+
+fn get_external_config_path() -> PathBuf {
+    get_config_dir().join("external_mods.json")
 }
 
 fn get_generated_profile_path() -> PathBuf {
@@ -93,6 +166,29 @@ fn load_config() -> AppConfig {
 
 fn save_config(config: &AppConfig) -> Result<(), String> {
     let config_path = get_config_path();
+    let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    fs::write(&config_path, content).map_err(|e| e.to_string())
+}
+
+fn load_external_mods_config() -> ExternalModsConfig {
+    let config_path = get_external_config_path();
+    let mut config = if config_path.exists() {
+        let content = fs::read_to_string(&config_path).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        ExternalModsConfig::default()
+    };
+    for entry in &mut config.packages {
+        entry.path = normalize_windows_path_string(&entry.path);
+    }
+    for entry in &mut config.natives {
+        entry.path = normalize_windows_path_string(&entry.path);
+    }
+    config
+}
+
+fn save_external_mods_config(config: &ExternalModsConfig) -> Result<(), String> {
+    let config_path = get_external_config_path();
     let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     fs::write(&config_path, content).map_err(|e| e.to_string())
 }
@@ -177,25 +273,28 @@ fn collect_mods() -> Result<Vec<ModInfo>, String> {
     let config = load_config();
     let mods_dir = mods_dir_from_config(&config)?;
 
-    if !mods_dir.exists() {
-        return Ok(Vec::new());
-    }
-
     let mut mods = Vec::new();
 
-    for entry in fs::read_dir(&mods_dir)
-        .map_err(|e| e.to_string())?
-        .flatten()
-    {
-        let path = entry.path();
-        if path.is_dir() {
-            let enabled = !is_disabled_path(&path);
-            if let Some(mod_info) = parse_mod_folder(&path, enabled) {
-                mods.push(mod_info);
+    if mods_dir.exists() {
+        for entry in fs::read_dir(&mods_dir)
+            .map_err(|e| e.to_string())?
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                let enabled = !is_disabled_path(&path);
+                if let Some(mod_info) = parse_mod_folder(&path, enabled) {
+                    mods.push(mod_info);
+                }
+            } else if is_dll_or_disabled_dll(&path) {
+                if let Some(mod_info) = parse_native_file(&path, "game_native") {
+                    mods.push(mod_info);
+                }
             }
         }
     }
 
+    mods.extend(collect_external_mods());
     mods.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(mods)
 }
@@ -227,10 +326,125 @@ fn parse_mod_folder(path: &Path, enabled: bool) -> Option<ModInfo> {
         version,
         author: String::new(),
         enabled,
-        path: path.to_string_lossy().to_string(),
+        path: normalize_windows_path_string(&path.to_string_lossy()),
         mod_type,
         files,
+        source: "local".to_string(),
+        config_files: find_config_files(path),
     })
+}
+
+fn parse_native_file(path: &Path, source: &str) -> Option<ModInfo> {
+    let file_name = path.file_name()?.to_string_lossy().to_string();
+    let id = strip_disabled_suffix(&file_name).to_string();
+    let enabled = !is_disabled_path(path);
+    let active_path = if enabled {
+        path.to_path_buf()
+    } else {
+        active_path_for(path)
+    };
+    let mut files = vec![file_name];
+    for config_file in find_sidecar_config_files(&active_path) {
+        if let Some(name) = config_file.file_name().and_then(|name| name.to_str()) {
+            files.push(name.to_string());
+        }
+    }
+
+    Some(ModInfo {
+        id: id.clone(),
+        name: extract_display_name(&id),
+        description: String::new(),
+        version: String::new(),
+        author: String::new(),
+        enabled,
+        path: normalize_windows_path_string(&path.to_string_lossy()),
+        mod_type: "native".to_string(),
+        files,
+        source: source.to_string(),
+        config_files: find_sidecar_config_files(&active_path)
+            .into_iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+    })
+}
+
+fn collect_external_mods() -> Vec<ModInfo> {
+    let config = load_external_mods_config();
+    let mut mods = Vec::new();
+
+    for entry in config.packages {
+        let path = PathBuf::from(&entry.path);
+        let mut mod_info = parse_mod_folder(&path, entry.enabled).unwrap_or_else(|| {
+            external_package_fallback(&path, entry.enabled)
+        });
+        mod_info.id = external_id("package", &path);
+        mod_info.source = "external_package".to_string();
+        mod_info.enabled = entry.enabled;
+        mods.push(mod_info);
+    }
+
+    for entry in config.natives {
+        let path = PathBuf::from(&entry.path);
+        let mut mod_info = parse_native_file(&path, "external_native").unwrap_or_else(|| {
+            external_native_fallback(&path, entry.enabled)
+        });
+        mod_info.id = external_id("native", &path);
+        mod_info.source = "external_native".to_string();
+        mod_info.enabled = entry.enabled;
+        mods.push(mod_info);
+    }
+
+    mods
+}
+
+fn external_package_fallback(path: &Path, enabled: bool) -> ModInfo {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("External Mod")
+        .to_string();
+    ModInfo {
+        id: external_id("package", path),
+        name: extract_display_name(&name),
+        description: "外部目录未找到或无法解析".to_string(),
+        version: String::new(),
+        author: String::new(),
+        enabled,
+        path: normalize_windows_path_string(&path.to_string_lossy()),
+        mod_type: "package".to_string(),
+        files: Vec::new(),
+        source: "external_package".to_string(),
+        config_files: find_config_files(path),
+    }
+}
+
+fn external_native_fallback(path: &Path, enabled: bool) -> ModInfo {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("External DLL")
+        .to_string();
+    ModInfo {
+        id: external_id("native", path),
+        name,
+        description: "外部 DLL 未找到或无法解析".to_string(),
+        version: String::new(),
+        author: String::new(),
+        enabled,
+        path: normalize_windows_path_string(&path.to_string_lossy()),
+        mod_type: "native".to_string(),
+        files: Vec::new(),
+        source: "external_native".to_string(),
+        config_files: find_sidecar_config_files(path)
+            .into_iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+    }
+}
+
+fn external_id(kind: &str, path: &Path) -> String {
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    format!("external:{kind}:{}", path_key(&resolved))
 }
 
 fn find_top_level_me3_files(path: &Path) -> Vec<PathBuf> {
@@ -326,6 +540,125 @@ pub fn install_mod_from_zip(zip_path: String) -> Result<String, String> {
     })?;
 
     Ok(extract_dir.to_string_lossy().to_string())
+}
+
+#[command]
+pub fn add_external_mod(path: String) -> Result<(), String> {
+    let mod_path = fs::canonicalize(Path::new(path.trim()))
+        .map_err(|e| format!("外部 Mod 目录无效：{e}"))?;
+    if !mod_path.is_dir() {
+        return Err("外部 Mod 必须选择文件夹".to_string());
+    }
+
+    let mut config = load_external_mods_config();
+        let normalized = normalize_windows_path_string(&mod_path.to_string_lossy());
+    if !config
+        .packages
+        .iter()
+        .any(|entry| same_path_string(&entry.path, &normalized))
+    {
+        config.packages.push(ExternalModEntry {
+            path: normalized,
+            enabled: true,
+        });
+    }
+    save_external_mods_config(&config)
+}
+
+#[command]
+pub fn add_external_dll(path: String) -> Result<(), String> {
+    let dll_path = fs::canonicalize(Path::new(path.trim()))
+        .map_err(|e| format!("外部 DLL 无效：{e}"))?;
+    if !dll_path.is_file()
+        || !dll_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map_or(false, |ext| ext.eq_ignore_ascii_case("dll"))
+    {
+        return Err("请选择 .dll 文件".to_string());
+    }
+
+    let mut config = load_external_mods_config();
+        let normalized = normalize_windows_path_string(&dll_path.to_string_lossy());
+    if !config
+        .natives
+        .iter()
+        .any(|entry| same_path_string(&entry.path, &normalized))
+    {
+        config.natives.push(ExternalNativeEntry {
+            path: normalized,
+            enabled: true,
+            load_early: false,
+        });
+    }
+    save_external_mods_config(&config)
+}
+
+#[command]
+pub fn remove_external_mod(mod_id: String) -> Result<(), String> {
+    let mut config = load_external_mods_config();
+    let before_packages = config.packages.len();
+    let before_natives = config.natives.len();
+
+    config
+        .packages
+        .retain(|entry| external_id("package", Path::new(&entry.path)) != mod_id);
+    config
+        .natives
+        .retain(|entry| external_id("native", Path::new(&entry.path)) != mod_id);
+
+    if before_packages == config.packages.len() && before_natives == config.natives.len() {
+        return Err("未找到外部 Mod 注册项".to_string());
+    }
+
+    save_external_mods_config(&config)
+}
+
+#[command]
+pub fn toggle_external_mod(mod_id: String, enabled: bool) -> Result<(), String> {
+    let mut config = load_external_mods_config();
+    let mut found = false;
+
+    for entry in &mut config.packages {
+        if external_id("package", Path::new(&entry.path)) == mod_id {
+            entry.enabled = enabled;
+            found = true;
+        }
+    }
+    for entry in &mut config.natives {
+        if external_id("native", Path::new(&entry.path)) == mod_id {
+            entry.enabled = enabled;
+            found = true;
+        }
+    }
+
+    if !found {
+        return Err("未找到外部 Mod 注册项".to_string());
+    }
+
+    save_external_mods_config(&config)
+}
+
+#[command]
+pub fn read_mod_config_file(path: String) -> Result<String, String> {
+    let config_path = validate_editable_config_path(&path)?;
+    fs::read_to_string(&config_path)
+        .map_err(|e| format!("读取配置文件失败：{}：{e}", config_path.to_string_lossy()))
+}
+
+#[command]
+pub fn write_mod_config_file(path: String, content: String) -> Result<(), String> {
+    let config_path = validate_editable_config_path(&path)?;
+    if config_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map_or(false, |ext| ext.eq_ignore_ascii_case("json"))
+    {
+        serde_json::from_str::<serde_json::Value>(&content)
+            .map_err(|e| format!("JSON 格式无效：{e}"))?;
+    }
+    fs::write(&config_path, content)
+        .map_err(|e| format!("写入配置文件失败：{}：{e}", config_path.to_string_lossy()))
 }
 
 fn extract_zip(zip_path: &Path, extract_dir: &Path) -> Result<(), String> {
@@ -425,7 +758,7 @@ fn sanitize_folder_name(name: &str) -> String {
 pub fn uninstall_mod(mod_path: String) -> Result<(), String> {
     let path = Path::new(&mod_path);
     if path.exists() {
-        fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+        trash::delete(path).map_err(|e| format!("移动 Mod 到回收站失败：{e}"))?;
     }
     Ok(())
 }
@@ -473,18 +806,100 @@ pub fn generate_me3_profile() -> Result<String, String> {
     for mod_info in selected_mods {
         let mod_dir = Path::new(&mod_info.path);
         let (mod_packages, mod_natives) = collect_entries_for_mod(mod_dir)?;
-        extend_unique(&mut packages, &mut seen_packages, mod_packages);
-        extend_unique(&mut natives, &mut seen_natives, mod_natives);
+        extend_unique_packages(&mut packages, &mut seen_packages, mod_packages);
+        extend_unique_natives(&mut natives, &mut seen_natives, mod_natives);
     }
 
     let config = load_config();
     let external_natives = infer_game_root_natives(Path::new(&config.game_path));
-    extend_unique(&mut natives, &mut seen_natives, external_natives);
+    extend_unique_natives(&mut natives, &mut seen_natives, external_natives);
 
     let profile_path = get_generated_profile_path();
     let content = build_me3_profile(&packages, &natives);
     fs::write(&profile_path, content).map_err(|e| e.to_string())?;
     Ok(profile_path.to_string_lossy().to_string())
+}
+
+#[command]
+pub fn get_launch_artifacts() -> Result<LaunchArtifacts, String> {
+    let profile_path = get_generated_profile_path();
+    let script_path = get_launch_script_path();
+    let log_path = get_launch_log_path();
+
+    Ok(LaunchArtifacts {
+        profile_content: read_optional_text(&profile_path)?,
+        profile_path: profile_path.to_string_lossy().to_string(),
+        script_content: read_optional_text(&script_path)?,
+        script_path: script_path.to_string_lossy().to_string(),
+        log_content: read_optional_text(&log_path)?,
+        log_path: log_path.to_string_lossy().to_string(),
+    })
+}
+
+#[command]
+pub fn get_special_mod_status() -> Result<SpecialModStatus, String> {
+    let config = load_config();
+    if config.game_path.trim().is_empty() {
+        return Err("请先设置游戏目录".to_string());
+    }
+
+    let game_dir = Path::new(&config.game_path);
+    Ok(build_special_mod_status(game_dir))
+}
+
+#[command]
+pub fn install_seamless_onlinefix(patch_game_path: String) -> Result<SpecialModStatus, String> {
+    let config = load_config();
+    if config.game_path.trim().is_empty() {
+        return Err("请先设置游戏目录".to_string());
+    }
+
+    let game_dir = Path::new(&config.game_path);
+    validate_game_dir(game_dir)?;
+
+    let patch_source = Path::new(patch_game_path.trim());
+    validate_patch_source(&patch_source)?;
+
+    copy_patch_tree(&patch_source, game_dir)?;
+    Ok(build_special_mod_status(game_dir))
+}
+
+#[command]
+pub fn detect_file_conflicts() -> Result<Vec<FileConflict>, String> {
+    let mods = collect_mods()?;
+    let mut owners_by_path: BTreeMap<String, Vec<ConflictOwner>> = BTreeMap::new();
+
+    for mod_info in mods.iter().filter(|mod_info| mod_info.enabled) {
+        let mod_dir = Path::new(&mod_info.path);
+        let (packages, natives) = collect_entries_for_mod(mod_dir)?;
+
+        for package in packages {
+            collect_conflict_package_files(&package.path, mod_info, &mut owners_by_path);
+        }
+
+        for native in natives {
+            if let Some(file_name) = native.path.file_name().and_then(|name| name.to_str()) {
+                push_conflict_owner(
+                    &mut owners_by_path,
+                    format!("native/{file_name}").to_lowercase(),
+                    ConflictOwner {
+                        mod_id: mod_info.id.clone(),
+                        mod_name: mod_info.name.clone(),
+                        source_path: native.path.to_string_lossy().to_string(),
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(owners_by_path
+        .into_iter()
+        .filter(|(_, owners)| owners.len() > 1)
+        .map(|(relative_path, owners)| FileConflict {
+            relative_path,
+            owners,
+        })
+        .collect())
 }
 
 fn mods_selected_for_generation(mods: &[ModInfo]) -> Vec<&ModInfo> {
@@ -497,22 +912,42 @@ fn mods_selected_for_generation(mods: &[ModInfo]) -> Vec<&ModInfo> {
 
         if !profile_mods.is_empty() {
             profile_mods.sort_by_key(|item| item.load_order);
-            return profile_mods
+            let mut selected = profile_mods
                 .into_iter()
                 .filter_map(|profile_mod| mods.iter().find(|item| item.id == profile_mod.mod_id))
-                .collect();
+                .collect::<Vec<_>>();
+            for mod_info in mods
+                .iter()
+                .filter(|item| item.enabled && !active_profile.mods.iter().any(|profile_mod| profile_mod.mod_id == item.id))
+            {
+                selected.push(mod_info);
+            }
+            return selected;
         }
     }
 
     mods.iter().filter(|item| item.enabled).collect()
 }
 
-fn extend_unique<T>(target: &mut Vec<T>, seen: &mut BTreeSet<T>, entries: Vec<T>)
-where
-    T: Ord + Clone,
-{
+fn extend_unique_packages(
+    target: &mut Vec<PackageEntry>,
+    seen: &mut BTreeSet<String>,
+    entries: Vec<PackageEntry>,
+) {
     for entry in entries {
-        if seen.insert(entry.clone()) {
+        if seen.insert(path_key(&entry.path)) {
+            target.push(entry);
+        }
+    }
+}
+
+fn extend_unique_natives(
+    target: &mut Vec<NativeEntry>,
+    seen: &mut BTreeSet<String>,
+    entries: Vec<NativeEntry>,
+) {
+    for entry in entries {
+        if seen.insert(path_key(&entry.path)) {
             target.push(entry);
         }
     }
@@ -538,6 +973,8 @@ pub fn launch_game(game_path: String, me3_path: String) -> Result<String, String
     if me3_path.trim().is_empty() {
         return Err("请先设置ME3目录".to_string());
     }
+
+    ensure_no_running_game_processes()?;
 
     let profile_path = generate_me3_profile()?;
     let profile_path = PathBuf::from(profile_path);
@@ -582,6 +1019,8 @@ pub fn diagnose_launch_game(game_path: String, me3_path: String) -> Result<Strin
     if me3_path.trim().is_empty() {
         return Err("请先设置ME3目录".to_string());
     }
+
+    ensure_no_running_game_processes()?;
 
     let profile_path = generate_me3_profile()?;
     let profile_path = PathBuf::from(profile_path);
@@ -693,6 +1132,14 @@ fn append_launch_log(message: &str) {
     }
 }
 
+fn read_optional_text(path: &Path) -> Result<String, String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+
+    fs::read_to_string(path).map_err(|e| format!("读取文件失败：{}，{}", path.to_string_lossy(), e))
+}
+
 fn build_launch_args(profile_path: &Path, launch_exe: &Path) -> Vec<String> {
     vec![
         "launch".to_string(),
@@ -741,6 +1188,40 @@ where
     output
 }
 
+fn ensure_no_running_game_processes() -> Result<(), String> {
+    let running = running_game_processes();
+    if running.is_empty() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "检测到仍在运行的游戏/注入进程：{}。\n请先关闭游戏窗口和 ME3 控制台，确认任务管理器里没有 nightreign.exe 或 me3-launcher.exe 后再启动。",
+        running.join(", ")
+    ))
+}
+
+#[cfg(windows)]
+fn running_game_processes() -> Vec<String> {
+    let Ok(output) = std::process::Command::new("tasklist")
+        .args(["/FO", "CSV", "/NH"])
+        .output()
+    else {
+        return Vec::new();
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    ["nightreign.exe", "me3-launcher.exe"]
+        .iter()
+        .filter(|process_name| stdout.to_lowercase().contains(&process_name.to_lowercase()))
+        .map(|process_name| process_name.to_string())
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn running_game_processes() -> Vec<String> {
+    Vec::new()
+}
+
 fn resolve_launch_exe(config: &AppConfig, game_dir: &Path) -> Result<PathBuf, String> {
     let launch_exe = if config.launch_exe_path.trim().is_empty() {
         game_dir.join("nightreign.exe")
@@ -764,6 +1245,124 @@ fn resolve_launch_exe(config: &AppConfig, game_dir: &Path) -> Result<PathBuf, St
     }
 
     Ok(launch_exe)
+}
+
+fn validate_game_dir(game_dir: &Path) -> Result<(), String> {
+    if !game_dir.join("nightreign.exe").exists() {
+        return Err("游戏目录无效：未找到 nightreign.exe".to_string());
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn infer_install_root(game_dir: &Path) -> PathBuf {
+    game_dir
+        .parent()
+        .map_or_else(|| game_dir.to_path_buf(), Path::to_path_buf)
+}
+
+#[allow(dead_code)]
+fn infer_patch_source_dir(game_dir: &Path) -> PathBuf {
+    infer_install_root(game_dir).join("联机补丁").join("Game")
+}
+
+#[allow(dead_code)]
+fn infer_sibling_mods_dir(game_dir: &Path) -> PathBuf {
+    infer_install_root(game_dir).join("mods")
+}
+
+fn build_special_mod_status(game_dir: &Path) -> SpecialModStatus {
+    let nighter_path = game_dir.join("mods").join("nighter.dll");
+    let nighter_config_path = game_dir.join("mods").join("nighter.json");
+
+    let missing_game_files = patch_required_files()
+        .iter()
+        .filter(|relative_path| !game_dir.join(relative_path).exists())
+        .map(|path| normalize_relative_path(path))
+        .collect::<Vec<_>>();
+
+    SpecialModStatus {
+        game_path: game_dir.to_string_lossy().to_string(),
+        seamless_installed: game_dir.join("SeamlessCoop").join("nrsc.dll").exists()
+            && game_dir
+                .join("SeamlessCoop")
+                .join("nrsc_settings.ini")
+                .exists(),
+        onlinefix_installed: onlinefix_required_files()
+            .iter()
+            .all(|relative_path| game_dir.join(relative_path).exists()),
+        nighter_available: nighter_path.exists(),
+        nighter_path: nighter_path.to_string_lossy().to_string(),
+        nighter_config_path: nighter_config_path.to_string_lossy().to_string(),
+        missing_game_files,
+    }
+}
+
+fn patch_required_files() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("SeamlessCoop").join("nrsc.dll"),
+        PathBuf::from("SeamlessCoop").join("nrsc_settings.ini"),
+        PathBuf::from("nrsc_launcher.exe"),
+        PathBuf::from("OnlineFix.ini"),
+        PathBuf::from("OnlineFix64.dll"),
+        PathBuf::from("dlllist.txt"),
+        PathBuf::from("winmm.dll"),
+        PathBuf::from("steam_api64.dll"),
+    ]
+}
+
+fn onlinefix_required_files() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("OnlineFix.ini"),
+        PathBuf::from("OnlineFix64.dll"),
+        PathBuf::from("dlllist.txt"),
+        PathBuf::from("winmm.dll"),
+    ]
+}
+
+fn validate_patch_source(patch_source: &Path) -> Result<(), String> {
+    if !patch_source.exists() {
+        return Err(format!(
+            "未找到联机补丁源目录：{}",
+            patch_source.to_string_lossy()
+        ));
+    }
+
+    let missing = patch_required_files()
+        .into_iter()
+        .filter(|relative_path| !patch_source.join(relative_path).exists())
+        .map(|path| normalize_relative_path(&path))
+        .collect::<Vec<_>>();
+
+    if !missing.is_empty() {
+        return Err(format!("联机补丁源目录缺少文件：{}", missing.join(", ")));
+    }
+
+    Ok(())
+}
+
+fn copy_patch_tree(patch_source: &Path, game_dir: &Path) -> Result<(), String> {
+    for relative_path in patch_required_files() {
+        let source = patch_source.join(&relative_path);
+        let target = game_dir.join(&relative_path);
+
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!("创建目录失败：{}，{}", parent.to_string_lossy(), e)
+            })?;
+        }
+
+        fs::copy(&source, &target).map_err(|e| {
+            format!(
+                "复制文件失败：{} -> {}，{}",
+                source.to_string_lossy(),
+                target.to_string_lossy(),
+                e
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 fn validate_launch_exe(launch_exe: &Path, game_dir: &Path) -> Result<(), String> {
@@ -814,6 +1413,25 @@ fn find_me3_exe(me3_path: &Path) -> Result<PathBuf, String> {
 fn collect_entries_for_mod(
     mod_dir: &Path,
 ) -> Result<(Vec<PackageEntry>, Vec<NativeEntry>), String> {
+    if mod_dir.is_file() {
+        if mod_dir
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map_or(false, |ext| ext.eq_ignore_ascii_case("dll"))
+        {
+            let resolved = fs::canonicalize(mod_dir).unwrap_or_else(|_| mod_dir.to_path_buf());
+            return Ok((
+                Vec::new(),
+                vec![NativeEntry {
+                    path: normalize_windows_path_buf(resolved),
+                    load_early: false,
+                }],
+            ));
+        }
+
+        return Ok((Vec::new(), Vec::new()));
+    }
+
     let mut packages = Vec::new();
     let mut natives = Vec::new();
 
@@ -847,9 +1465,10 @@ fn parse_me3_entries(
         if let Some(entries) = value.get(key).and_then(|v| v.as_array()) {
             for entry in entries {
                 if let Some(path) = entry.get("path").and_then(|v| v.as_str()) {
-                    packages.push(PackageEntry {
-                        path: resolve_mod_path(mod_dir, path),
-                    });
+                    let resolved = resolve_mod_path(mod_dir, path);
+                    if resolved.exists() {
+                        packages.push(PackageEntry { path: resolved });
+                    }
                 }
             }
         }
@@ -858,13 +1477,16 @@ fn parse_me3_entries(
     if let Some(entries) = value.get("natives").and_then(|v| v.as_array()) {
         for entry in entries {
             if let Some(path) = entry.get("path").and_then(|v| v.as_str()) {
-                natives.push(NativeEntry {
-                    path: resolve_mod_path(mod_dir, path),
-                    load_early: entry
-                        .get("load_early")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                });
+                let resolved = resolve_mod_path(mod_dir, path);
+                if resolved.exists() {
+                    natives.push(NativeEntry {
+                        path: resolved,
+                        load_early: entry
+                            .get("load_early")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                    });
+                }
             }
         }
     }
@@ -904,15 +1526,20 @@ fn infer_game_root_natives(game_dir: &Path) -> Vec<NativeEntry> {
     let nrsc = seamless_dir.join("nrsc.dll");
     if nrsc.exists() {
         natives.push(NativeEntry {
-            path: nrsc,
+            path: normalize_windows_path_buf(nrsc),
             load_early: true,
         });
     }
 
-    let nighter = seamless_dir.join("nighter.dll");
-    if nighter.exists() {
+    for nighter in [
+        seamless_dir.join("nighter.dll"),
+        game_dir.join("mods").join("nighter.dll"),
+    ] {
+        if !nighter.exists() {
+            continue;
+        }
         natives.push(NativeEntry {
-            path: nighter,
+            path: normalize_windows_path_buf(nighter),
             load_early: false,
         });
     }
@@ -928,7 +1555,7 @@ fn resolve_mod_path(mod_dir: &Path, entry_path: &str) -> PathBuf {
         mod_dir.join(path)
     };
 
-    fs::canonicalize(&resolved).unwrap_or(resolved)
+    normalize_windows_path_buf(fs::canonicalize(&resolved).unwrap_or(resolved))
 }
 
 fn build_me3_profile(packages: &[PackageEntry], natives: &[NativeEntry]) -> String {
@@ -957,7 +1584,7 @@ fn build_me3_profile(packages: &[PackageEntry], natives: &[NativeEntry]) -> Stri
 }
 
 fn toml_string(path: &Path) -> String {
-    let value = path.to_string_lossy().to_string();
+    let value = normalize_windows_path_string(&path.to_string_lossy());
     serde_json::to_string(&value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
@@ -965,10 +1592,118 @@ fn has_dll_file(path: &Path) -> bool {
     !find_dll_files(path).is_empty()
 }
 
+fn is_dll_or_disabled_dll(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map_or(false, |name| {
+            let lower = name.to_lowercase();
+            lower.ends_with(".dll") || lower.ends_with(".dll.disabled")
+        })
+}
+
 fn find_dll_files(path: &Path) -> Vec<PathBuf> {
     let mut dlls = Vec::new();
     collect_files_with_extension(path, "dll", &mut dlls);
     dlls
+}
+
+fn find_config_files(path: &Path) -> Vec<String> {
+    if path.is_file() {
+        return find_sidecar_config_files(path)
+            .into_iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect();
+    }
+
+    let Ok(entries) = fs::read_dir(path) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && is_editable_config_extension(path))
+        .map(|path| path.to_string_lossy().to_string())
+        .collect()
+}
+
+fn find_sidecar_config_files(path: &Path) -> Vec<PathBuf> {
+    let active_path = if is_disabled_path(path) {
+        active_path_for(path)
+    } else {
+        path.to_path_buf()
+    };
+    let Some(parent) = active_path.parent() else {
+        return Vec::new();
+    };
+    let Some(stem) = active_path.file_stem().and_then(|stem| stem.to_str()) else {
+        return Vec::new();
+    };
+
+    ["json", "ini"]
+        .iter()
+        .map(|extension| parent.join(format!("{stem}.{extension}")))
+        .filter(|candidate| candidate.exists())
+        .collect()
+}
+
+fn is_editable_config_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map_or(false, |ext| {
+            ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("ini")
+        })
+}
+
+fn same_path_string(left: &str, right: &str) -> bool {
+    let left_path = Path::new(left);
+    let right_path = Path::new(right);
+    match (fs::canonicalize(left_path), fs::canonicalize(right_path)) {
+        (Ok(left), Ok(right)) => path_key(&left) == path_key(&right),
+        _ => normalize_windows_path_string(left)
+            .eq_ignore_ascii_case(&normalize_windows_path_string(right)),
+    }
+}
+
+fn path_key(path: &Path) -> String {
+    normalize_windows_path_string(&path.to_string_lossy()).to_lowercase()
+}
+
+fn normalize_windows_path_buf(path: PathBuf) -> PathBuf {
+    PathBuf::from(normalize_windows_path_string(&path.to_string_lossy()))
+}
+
+fn normalize_windows_path_string(path: &str) -> String {
+    if let Some(stripped) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{}", stripped)
+    } else if let Some(stripped) = path.strip_prefix(r"\\?\") {
+        stripped.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+fn validate_editable_config_path(path: &str) -> Result<PathBuf, String> {
+    let config_path = fs::canonicalize(Path::new(path.trim()))
+        .map_err(|e| format!("配置文件不存在：{e}"))?;
+    if !config_path.is_file() || !is_editable_config_extension(&config_path) {
+        return Err("只能编辑 JSON 或 INI 配置文件".to_string());
+    }
+
+    let mods = collect_mods()?;
+    let allowed = mods.iter().any(|mod_info| {
+        mod_info.config_files.iter().any(|candidate| {
+            fs::canonicalize(candidate)
+                .map(|candidate| candidate == config_path)
+                .unwrap_or(false)
+        })
+    });
+
+    if !allowed {
+        return Err("该配置文件不属于当前已扫描的 Mod".to_string());
+    }
+
+    Ok(config_path)
 }
 
 fn collect_files_with_extension(path: &Path, extension: &str, files: &mut Vec<PathBuf>) {
@@ -985,9 +1720,82 @@ fn collect_files_with_extension(path: &Path, extension: &str, files: &mut Vec<Pa
             .and_then(|ext| ext.to_str())
             .map_or(false, |ext| ext.eq_ignore_ascii_case(extension))
         {
-            files.push(fs::canonicalize(&path).unwrap_or(path));
+            files.push(normalize_windows_path_buf(
+                fs::canonicalize(&path).unwrap_or(path),
+            ));
         }
     }
+}
+
+fn collect_conflict_package_files(
+    package_root: &Path,
+    mod_info: &ModInfo,
+    owners_by_path: &mut BTreeMap<String, Vec<ConflictOwner>>,
+) {
+    collect_conflict_package_files_inner(package_root, package_root, mod_info, owners_by_path);
+}
+
+fn collect_conflict_package_files_inner(
+    package_root: &Path,
+    current_dir: &Path,
+    mod_info: &ModInfo,
+    owners_by_path: &mut BTreeMap<String, Vec<ConflictOwner>>,
+) {
+    let Ok(entries) = fs::read_dir(current_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_conflict_package_files_inner(package_root, &path, mod_info, owners_by_path);
+            continue;
+        }
+
+        let Some(relative_path) = path
+            .strip_prefix(package_root)
+            .ok()
+            .map(normalize_relative_path)
+        else {
+            continue;
+        };
+
+        if relative_path.is_empty() {
+            continue;
+        }
+
+        push_conflict_owner(
+            owners_by_path,
+            relative_path.to_lowercase(),
+            ConflictOwner {
+                mod_id: mod_info.id.clone(),
+                mod_name: mod_info.name.clone(),
+                source_path: path.to_string_lossy().to_string(),
+            },
+        );
+    }
+}
+
+fn push_conflict_owner(
+    owners_by_path: &mut BTreeMap<String, Vec<ConflictOwner>>,
+    relative_path: String,
+    owner: ConflictOwner,
+) {
+    let owners = owners_by_path.entry(relative_path).or_default();
+    if owners.iter().any(|item| item.mod_id == owner.mod_id) {
+        return;
+    }
+    owners.push(owner);
+}
+
+fn normalize_relative_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn has_package_like_content(path: &Path) -> bool {
@@ -1086,5 +1894,73 @@ mod tests {
         let a_index = profile.find(r"D:\\Game\\mods\\a_first").unwrap();
 
         assert!(z_index < a_index);
+    }
+
+    #[test]
+    fn build_profile_strips_windows_verbatim_prefix() {
+        let packages = vec![PackageEntry {
+            path: PathBuf::from(r"\\?\D:\Game\mods\duchessunmask"),
+        }];
+        let natives = vec![NativeEntry {
+            path: PathBuf::from(r"\\?\D:\Game\mods\nighter.dll"),
+            load_early: false,
+        }];
+
+        let profile = build_me3_profile(&packages, &natives);
+
+        assert!(!profile.contains(r"\\?\\"));
+        assert!(profile.contains(r"D:\\Game\\mods\\duchessunmask"));
+        assert!(profile.contains(r"D:\\Game\\mods\\nighter.dll"));
+    }
+
+    #[test]
+    fn unique_native_paths_ignore_verbatim_prefix() {
+        let mut target = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        extend_unique_natives(
+            &mut target,
+            &mut seen,
+            vec![
+                NativeEntry {
+                    path: PathBuf::from(r"\\?\D:\Game\mods\nighter.dll"),
+                    load_early: false,
+                },
+                NativeEntry {
+                    path: PathBuf::from(r"D:\Game\mods\nighter.dll"),
+                    load_early: false,
+                },
+            ],
+        );
+
+        assert_eq!(target.len(), 1);
+    }
+
+    #[test]
+    fn parse_me3_entries_skips_missing_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_test_{}",
+            current_timestamp()
+        ));
+        let mod_dir = root.join("More Map");
+        let package_dir = mod_dir.join("mod");
+        fs::create_dir_all(&package_dir).unwrap();
+
+        let content = r#"
+profileVersion = "v1"
+
+[[packages]]
+path = "mod"
+
+[[natives]]
+path = "mod/SeamlessCoop/nrsc.dll"
+load_early = true
+"#;
+
+        let (packages, natives) = parse_me3_entries(&mod_dir, content).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(packages.len(), 1);
+        assert!(natives.is_empty());
     }
 }
