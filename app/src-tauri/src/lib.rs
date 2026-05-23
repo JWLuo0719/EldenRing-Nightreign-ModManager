@@ -24,6 +24,7 @@ pub fn run() {
             mod_manager::set_launch_exe_path,
             mod_manager::get_mods_dir,
             mod_manager::launch_game,
+            mod_manager::diagnose_launch_game,
             mod_manager::generate_me3_profile,
             profile::get_profiles,
             profile::create_profile,

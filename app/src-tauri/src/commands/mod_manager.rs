@@ -2,10 +2,15 @@ use super::profile;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 use tauri::command;
 use zip::ZipArchive;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModInfo {
@@ -54,6 +59,18 @@ fn get_config_path() -> PathBuf {
 
 fn get_generated_profile_path() -> PathBuf {
     get_config_dir().join("active-nightreign.me3")
+}
+
+fn get_launch_script_path() -> PathBuf {
+    let launch_dir = get_config_dir().join("launch");
+    fs::create_dir_all(&launch_dir).ok();
+    launch_dir.join("launch-nightreign.bat")
+}
+
+fn get_launch_log_path() -> PathBuf {
+    let launch_dir = get_config_dir().join("launch");
+    fs::create_dir_all(&launch_dir).ok();
+    launch_dir.join("last-launch.log")
 }
 
 fn load_config() -> AppConfig {
@@ -460,6 +477,10 @@ pub fn generate_me3_profile() -> Result<String, String> {
         extend_unique(&mut natives, &mut seen_natives, mod_natives);
     }
 
+    let config = load_config();
+    let external_natives = infer_game_root_natives(Path::new(&config.game_path));
+    extend_unique(&mut natives, &mut seen_natives, external_natives);
+
     let profile_path = get_generated_profile_path();
     let content = build_me3_profile(&packages, &natives);
     fs::write(&profile_path, content).map_err(|e| e.to_string())?;
@@ -498,7 +519,7 @@ where
 }
 
 #[command]
-pub fn launch_game(game_path: String, me3_path: String) -> Result<(), String> {
+pub fn launch_game(game_path: String, me3_path: String) -> Result<String, String> {
     let config = load_config();
     let game_path = if game_path.trim().is_empty() {
         config.game_path.clone()
@@ -519,23 +540,205 @@ pub fn launch_game(game_path: String, me3_path: String) -> Result<(), String> {
     }
 
     let profile_path = generate_me3_profile()?;
+    let profile_path = PathBuf::from(profile_path);
     let me3_exe = find_me3_exe(Path::new(&me3_path))?;
     let launch_exe = resolve_launch_exe(&config, Path::new(&game_path))?;
-    let working_dir = launch_exe
-        .parent()
-        .unwrap_or_else(|| Path::new(&game_path))
-        .to_path_buf();
+    let args = build_launch_args(&profile_path, &launch_exe);
+    let working_dir = me3_exe.parent().unwrap_or_else(|| Path::new(&me3_path));
+    let launch_script = write_launch_script(&me3_exe, &args, working_dir)?;
+    append_launch_log(&format!(
+        "\n=== Launch {} ===\nscript: {}\n{}\n",
+        current_timestamp(),
+        launch_script.to_string_lossy(),
+        format_command_line(&me3_exe, &args, working_dir)
+    ));
 
-    std::process::Command::new(&me3_exe)
-        .args(["launch", "--game", "nightreign", "-p"])
-        .arg(&profile_path)
-        .arg("--exe")
-        .arg(&launch_exe)
+    launch_via_script(&launch_script)?;
+
+    Ok(format!(
+        "启动脚本已执行。\n脚本：{}\n日志：{}",
+        launch_script.to_string_lossy(),
+        get_launch_log_path().to_string_lossy()
+    ))
+}
+
+#[command]
+pub fn diagnose_launch_game(game_path: String, me3_path: String) -> Result<String, String> {
+    let config = load_config();
+    let game_path = if game_path.trim().is_empty() {
+        config.game_path.clone()
+    } else {
+        game_path
+    };
+    let me3_path = if me3_path.trim().is_empty() {
+        config.me3_path.clone()
+    } else {
+        me3_path
+    };
+
+    if game_path.trim().is_empty() {
+        return Err("请先设置游戏目录".to_string());
+    }
+    if me3_path.trim().is_empty() {
+        return Err("请先设置ME3目录".to_string());
+    }
+
+    let profile_path = generate_me3_profile()?;
+    let profile_path = PathBuf::from(profile_path);
+    let me3_exe = find_me3_exe(Path::new(&me3_path))?;
+    let launch_exe = resolve_launch_exe(&config, Path::new(&game_path))?;
+    let args = build_launch_args(&profile_path, &launch_exe);
+    let working_dir = me3_exe.parent().unwrap_or_else(|| Path::new(&me3_path));
+    let command_line = format_command_line(&me3_exe, &args, working_dir);
+
+    let mut child = std::process::Command::new(&me3_exe)
+        .args(&args)
         .current_dir(working_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("无法启动 ME3：{e}\n\n命令：{command_line}"))?;
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(4) {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|e| format!("检查 ME3 状态失败：{e}\n\n命令：{command_line}"))?
+        {
+            let stdout = read_child_pipe(child.stdout.take());
+            let stderr = read_child_pipe(child.stderr.take());
+
+            if status.success() {
+                return Ok(format!("ME3 已完成启动流程。\n命令：{command_line}"));
+            }
+
+            return Err(format!(
+                "ME3 启动失败，退出码：{}\n\n命令：{}\n\nstdout:\n{}\n\nstderr:\n{}",
+                status
+                    .code()
+                    .map_or_else(|| "unknown".to_string(), |code| code.to_string()),
+                command_line,
+                if stdout.trim().is_empty() {
+                    "(empty)"
+                } else {
+                    stdout.trim()
+                },
+                if stderr.trim().is_empty() {
+                    "(empty)"
+                } else {
+                    stderr.trim()
+                },
+            ));
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    Ok(format!("ME3 进程已启动。\n命令：{command_line}"))
+}
+
+fn write_launch_script(
+    me3_exe: &Path,
+    args: &[String],
+    working_dir: &Path,
+) -> Result<PathBuf, String> {
+    let script_path = get_launch_script_path();
+    let log_path = get_launch_log_path();
+    let command = std::iter::once(quote_arg(&me3_exe.to_string_lossy()))
+        .chain(args.iter().map(|arg| quote_arg(arg)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let content = format!(
+        "@echo off\r\nchcp 65001 >nul\r\ncd /d {}\r\necho === %date% %time% === >> {}\r\necho {} >> {}\r\n{} >> {} 2>>&1\r\necho exit_code=%%ERRORLEVEL%% >> {}\r\n",
+        quote_arg(&working_dir.to_string_lossy()),
+        quote_arg(&log_path.to_string_lossy()),
+        command.replace('%', "%%"),
+        quote_arg(&log_path.to_string_lossy()),
+        command,
+        quote_arg(&log_path.to_string_lossy()),
+        quote_arg(&log_path.to_string_lossy())
+    );
+
+    fs::write(&script_path, content).map_err(|e| format!("创建启动脚本失败：{e}"))?;
+    Ok(script_path)
+}
+
+fn launch_via_script(script_path: &Path) -> Result<(), String> {
+    let mut command = std::process::Command::new("cmd");
+    command
+        .arg("/K")
+        .arg(script_path)
+        .current_dir(script_path.parent().unwrap_or_else(|| Path::new(".")));
+
+    #[cfg(windows)]
+    command.creation_flags(0x00000010);
+
+    command
+        .spawn()
+        .map_err(|e| format!("执行启动脚本失败：{e}"))?;
 
     Ok(())
+}
+
+fn append_launch_log(message: &str) {
+    use std::io::Write;
+
+    let log_path = get_launch_log_path();
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = file.write_all(message.as_bytes());
+    }
+}
+
+fn build_launch_args(profile_path: &Path, launch_exe: &Path) -> Vec<String> {
+    vec![
+        "launch".to_string(),
+        "--exe".to_string(),
+        launch_exe.to_string_lossy().to_string(),
+        "--skip-steam-init".to_string(),
+        "--online".to_string(),
+        "--game".to_string(),
+        "nightreign".to_string(),
+        "-p".to_string(),
+        profile_path.to_string_lossy().to_string(),
+    ]
+}
+
+fn format_command_line(exe: &Path, args: &[String], working_dir: &Path) -> String {
+    let mut parts = vec![format!(
+        "cd /d {}",
+        quote_arg(&working_dir.to_string_lossy())
+    )];
+    let command = std::iter::once(quote_arg(&exe.to_string_lossy()))
+        .chain(args.iter().map(|arg| quote_arg(arg)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    parts.push(command);
+    parts.join(" && ")
+}
+
+fn quote_arg(value: &str) -> String {
+    if value.contains(' ') || value.contains('\\') || value.contains(':') {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn read_child_pipe<T>(pipe: Option<T>) -> String
+where
+    T: Read,
+{
+    let Some(mut pipe) = pipe else {
+        return String::new();
+    };
+
+    let mut output = String::new();
+    let _ = pipe.read_to_string(&mut output);
+    output
 }
 
 fn resolve_launch_exe(config: &AppConfig, game_dir: &Path) -> Result<PathBuf, String> {
@@ -546,6 +749,20 @@ fn resolve_launch_exe(config: &AppConfig, game_dir: &Path) -> Result<PathBuf, St
     };
 
     validate_launch_exe(&launch_exe, game_dir)?;
+
+    if launch_exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map_or(false, |name| name.eq_ignore_ascii_case("nrsc_launcher.exe"))
+    {
+        let game_exe = game_dir.join("nightreign.exe");
+        validate_launch_exe(&game_exe, game_dir)?;
+        append_launch_log(
+            "检测到 nrsc_launcher.exe；ME3 启动链路将改用 nightreign.exe，并通过 profile 加载 SeamlessCoop/nrsc.dll。\n",
+        );
+        return Ok(game_exe);
+    }
+
     Ok(launch_exe)
 }
 
@@ -675,6 +892,32 @@ fn infer_entries_for_mod(mod_dir: &Path) -> (Vec<PackageEntry>, Vec<NativeEntry>
     }
 
     (packages, natives)
+}
+
+fn infer_game_root_natives(game_dir: &Path) -> Vec<NativeEntry> {
+    if game_dir.as_os_str().is_empty() {
+        return Vec::new();
+    }
+
+    let mut natives = Vec::new();
+    let seamless_dir = game_dir.join("SeamlessCoop");
+    let nrsc = seamless_dir.join("nrsc.dll");
+    if nrsc.exists() {
+        natives.push(NativeEntry {
+            path: nrsc,
+            load_early: true,
+        });
+    }
+
+    let nighter = seamless_dir.join("nighter.dll");
+    if nighter.exists() {
+        natives.push(NativeEntry {
+            path: nighter,
+            load_early: false,
+        });
+    }
+
+    natives
 }
 
 fn resolve_mod_path(mod_dir: &Path, entry_path: &str) -> PathBuf {

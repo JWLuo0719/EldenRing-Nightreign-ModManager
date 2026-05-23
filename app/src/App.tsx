@@ -71,7 +71,15 @@ function App() {
         await task();
       } catch (e) {
         console.error(fallbackMessage, e);
-        pushToast("error", `${fallbackMessage}：${String(e)}`);
+        const message = `${fallbackMessage}：${String(e)}`;
+        pushToast("error", message);
+        setConfirmState({
+          title: fallbackMessage,
+          message,
+          confirmText: "知道了",
+          danger: true,
+          onConfirm: async () => {},
+        });
       } finally {
         setBusy(false);
       }
@@ -231,8 +239,11 @@ function App() {
 
   const handleLaunchGame = async () => {
     await runTask(async () => {
-      await invoke("launch_game", { gamePath: "", me3Path: "" });
-      pushToast("success", "已通过 ME3 启动游戏");
+      const result = await invoke<string>("launch_game", {
+        gamePath: "",
+        me3Path: "",
+      });
+      pushToast("success", result.split("\n")[0] || "已通过 ME3 启动游戏");
     }, "启动游戏失败");
   };
 
@@ -354,7 +365,7 @@ function ConfirmDialog({
         <div className="mb-3 text-lg font-semibold text-text-primary">
           {state.title}
         </div>
-        <p className="mb-6 text-sm leading-6 text-text-secondary">
+        <p className="mb-6 max-h-[50vh] overflow-auto whitespace-pre-wrap text-sm leading-6 text-text-secondary">
           {state.message}
         </p>
         <div className="flex justify-end gap-3">
