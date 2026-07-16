@@ -1,13 +1,19 @@
 use super::profile;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tauri::command;
 use zip::ZipArchive;
+
+const MAX_LAUNCH_LOG_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_LAUNCH_LOG_READ_BYTES: u64 = 512 * 1024;
+const MAX_CONFLICT_FILES_SCANNED: usize = 500_000;
+const MAX_CONFLICT_RESULTS: usize = 10_000;
+const MAX_SCAN_DEPTH: usize = 64;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -73,6 +79,28 @@ pub struct SpecialModStatus {
     pub nighter_path: String,
     pub nighter_config_path: String,
     pub missing_game_files: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchPreflight {
+    pub ready: bool,
+    pub checks: Vec<LaunchPreflightCheck>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchPreflightCheck {
+    pub id: String,
+    pub label: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TasklistProcess {
+    name: String,
+    pid: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -265,8 +293,10 @@ pub fn get_mods_dir() -> Result<String, String> {
 }
 
 #[command]
-pub fn scan_mods() -> Vec<ModInfo> {
-    collect_mods().unwrap_or_default()
+pub async fn scan_mods() -> Result<Vec<ModInfo>, String> {
+    tauri::async_runtime::spawn_blocking(collect_mods)
+        .await
+        .map_err(|error| format!("扫描任务异常结束：{error}"))?
 }
 
 fn collect_mods() -> Result<Vec<ModInfo>, String> {
@@ -295,7 +325,7 @@ fn collect_mods() -> Result<Vec<ModInfo>, String> {
     }
 
     mods.extend(collect_external_mods());
-    mods.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    mods.sort_by_key(|item| item.name.to_lowercase());
     Ok(mods)
 }
 
@@ -374,9 +404,8 @@ fn collect_external_mods() -> Vec<ModInfo> {
 
     for entry in config.packages {
         let path = PathBuf::from(&entry.path);
-        let mut mod_info = parse_mod_folder(&path, entry.enabled).unwrap_or_else(|| {
-            external_package_fallback(&path, entry.enabled)
-        });
+        let mut mod_info = parse_mod_folder(&path, entry.enabled)
+            .unwrap_or_else(|| external_package_fallback(&path, entry.enabled));
         mod_info.id = external_id("package", &path);
         mod_info.source = "external_package".to_string();
         mod_info.enabled = entry.enabled;
@@ -385,9 +414,8 @@ fn collect_external_mods() -> Vec<ModInfo> {
 
     for entry in config.natives {
         let path = PathBuf::from(&entry.path);
-        let mut mod_info = parse_native_file(&path, "external_native").unwrap_or_else(|| {
-            external_native_fallback(&path, entry.enabled)
-        });
+        let mut mod_info = parse_native_file(&path, "external_native")
+            .unwrap_or_else(|| external_native_fallback(&path, entry.enabled));
         mod_info.id = external_id("native", &path);
         mod_info.source = "external_native".to_string();
         mod_info.enabled = entry.enabled;
@@ -458,7 +486,7 @@ fn find_top_level_me3_files(path: &Path) -> Vec<PathBuf> {
             let is_me3 = path
                 .extension()
                 .and_then(|ext| ext.to_str())
-                .map_or(false, |ext| ext.eq_ignore_ascii_case("me3"));
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("me3"));
             is_me3.then_some(path)
         })
         .collect()
@@ -515,7 +543,13 @@ pub fn get_mod_info(mod_path: String) -> Result<ModInfo, String> {
 }
 
 #[command]
-pub fn install_mod_from_zip(zip_path: String) -> Result<String, String> {
+pub async fn install_mod_from_zip(zip_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || install_mod_from_zip_blocking(&zip_path))
+        .await
+        .map_err(|error| format!("ZIP 安装任务异常结束：{error}"))?
+}
+
+fn install_mod_from_zip_blocking(zip_path: &str) -> Result<String, String> {
     let zip_path = Path::new(&zip_path);
     let config = load_config();
     let mods_dir = mods_dir_from_config(&config)?;
@@ -544,14 +578,14 @@ pub fn install_mod_from_zip(zip_path: String) -> Result<String, String> {
 
 #[command]
 pub fn add_external_mod(path: String) -> Result<(), String> {
-    let mod_path = fs::canonicalize(Path::new(path.trim()))
-        .map_err(|e| format!("外部 Mod 目录无效：{e}"))?;
+    let mod_path =
+        fs::canonicalize(Path::new(path.trim())).map_err(|e| format!("外部 Mod 目录无效：{e}"))?;
     if !mod_path.is_dir() {
         return Err("外部 Mod 必须选择文件夹".to_string());
     }
 
     let mut config = load_external_mods_config();
-        let normalized = normalize_windows_path_string(&mod_path.to_string_lossy());
+    let normalized = normalize_windows_path_string(&mod_path.to_string_lossy());
     if !config
         .packages
         .iter()
@@ -567,19 +601,19 @@ pub fn add_external_mod(path: String) -> Result<(), String> {
 
 #[command]
 pub fn add_external_dll(path: String) -> Result<(), String> {
-    let dll_path = fs::canonicalize(Path::new(path.trim()))
-        .map_err(|e| format!("外部 DLL 无效：{e}"))?;
+    let dll_path =
+        fs::canonicalize(Path::new(path.trim())).map_err(|e| format!("外部 DLL 无效：{e}"))?;
     if !dll_path.is_file()
         || !dll_path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map_or(false, |ext| ext.eq_ignore_ascii_case("dll"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
     {
         return Err("请选择 .dll 文件".to_string());
     }
 
     let mut config = load_external_mods_config();
-        let normalized = normalize_windows_path_string(&dll_path.to_string_lossy());
+    let normalized = normalize_windows_path_string(&dll_path.to_string_lossy());
     if !config
         .natives
         .iter()
@@ -652,7 +686,7 @@ pub fn write_mod_config_file(path: String, content: String) -> Result<(), String
     if config_path
         .extension()
         .and_then(|ext| ext.to_str())
-        .map_or(false, |ext| ext.eq_ignore_ascii_case("json"))
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
     {
         serde_json::from_str::<serde_json::Value>(&content)
             .map_err(|e| format!("JSON 格式无效：{e}"))?;
@@ -672,7 +706,7 @@ fn extract_zip(zip_path: &Path, extract_dir: &Path) -> Result<(), String> {
             return Err("ZIP中包含不安全路径".to_string());
         };
 
-        let relative_path = strip_zip_root(&enclosed_name, single_root.as_deref());
+        let relative_path = strip_zip_root(enclosed_name, single_root.as_deref());
         if relative_path.as_os_str().is_empty() {
             continue;
         }
@@ -756,22 +790,22 @@ fn sanitize_folder_name(name: &str) -> String {
 
 #[command]
 pub fn uninstall_mod(mod_path: String) -> Result<(), String> {
-    let path = Path::new(&mod_path);
+    let path = validate_managed_mod_path(&mod_path)?;
     if path.exists() {
-        trash::delete(path).map_err(|e| format!("移动 Mod 到回收站失败：{e}"))?;
+        trash::delete(&path).map_err(|e| format!("移动 Mod 到回收站失败：{e}"))?;
     }
     Ok(())
 }
 
 #[command]
 pub fn toggle_mod(mod_path: String, enabled: bool) -> Result<(), String> {
-    let path = Path::new(&mod_path);
+    let path = validate_managed_mod_path(&mod_path)?;
 
     if enabled {
         let source = if path.exists() {
-            path.to_path_buf()
+            path.clone()
         } else {
-            disabled_path_for(path)
+            disabled_path_for(&path)
         };
         let target = active_path_for(&source);
         if !source.exists() {
@@ -784,14 +818,40 @@ pub fn toggle_mod(mod_path: String, enabled: bool) -> Result<(), String> {
             fs::rename(&source, &target).map_err(|e| e.to_string())?;
         }
     } else if path.exists() {
-        let target = disabled_path_for(path);
+        let target = disabled_path_for(&path);
         if target.exists() {
             return Err("禁用失败：目标目录已存在".to_string());
         }
-        fs::rename(path, &target).map_err(|e| e.to_string())?;
+        fs::rename(&path, &target).map_err(|e| e.to_string())?;
     }
 
     Ok(())
+}
+
+fn validate_managed_mod_path(mod_path: &str) -> Result<PathBuf, String> {
+    let config = load_config();
+    let mods_dir = mods_dir_from_config(&config)?;
+    validate_direct_child(&mods_dir, Path::new(mod_path.trim()))
+}
+
+fn validate_direct_child(managed_root: &Path, candidate: &Path) -> Result<PathBuf, String> {
+    let managed_root = fs::canonicalize(managed_root)
+        .map_err(|e| format!("Mod 目录不可访问：{}：{e}", managed_root.to_string_lossy()))?;
+    let candidate = fs::canonicalize(candidate)
+        .map_err(|e| format!("Mod 不存在或不可访问：{}：{e}", candidate.to_string_lossy()))?;
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "Mod 路径没有父目录".to_string())?;
+
+    if parent != managed_root {
+        return Err("拒绝操作：只能启停或删除 Game\\mods 的直属 Mod 项".to_string());
+    }
+
+    if !candidate.is_dir() && !is_dll_or_disabled_dll(&candidate) {
+        return Err("拒绝操作：目标必须是 Mod 文件夹或 DLL".to_string());
+    }
+
+    Ok(candidate)
 }
 
 #[command]
@@ -831,7 +891,7 @@ pub fn get_launch_artifacts() -> Result<LaunchArtifacts, String> {
         profile_path: profile_path.to_string_lossy().to_string(),
         script_content: read_optional_text(&script_path)?,
         script_path: script_path.to_string_lossy().to_string(),
-        log_content: read_optional_text(&log_path)?,
+        log_content: read_text_tail(&log_path, MAX_LAUNCH_LOG_READ_BYTES)?,
         log_path: log_path.to_string_lossy().to_string(),
     })
 }
@@ -848,6 +908,217 @@ pub fn get_special_mod_status() -> Result<SpecialModStatus, String> {
 }
 
 #[command]
+pub async fn get_launch_preflight() -> Result<LaunchPreflight, String> {
+    tauri::async_runtime::spawn_blocking(build_launch_preflight)
+        .await
+        .map_err(|error| format!("启动前检查异常结束：{error}"))?
+}
+
+fn build_launch_preflight() -> Result<LaunchPreflight, String> {
+    let config = load_config();
+    let mut checks = Vec::new();
+    let game_dir = Path::new(&config.game_path);
+    let game_valid = !config.game_path.trim().is_empty() && validate_game_dir(game_dir).is_ok();
+
+    if game_valid {
+        add_preflight_check(
+            &mut checks,
+            "game_path",
+            "游戏目录",
+            "pass",
+            format!(
+                "已找到 {}",
+                game_dir.join("nightreign.exe").to_string_lossy()
+            ),
+        );
+    } else {
+        add_preflight_check(
+            &mut checks,
+            "game_path",
+            "游戏目录",
+            "error",
+            "目录未配置，或没有找到 nightreign.exe".to_string(),
+        );
+    }
+
+    match find_me3_exe(Path::new(&config.me3_path)) {
+        Ok(me3_exe) => add_preflight_check(
+            &mut checks,
+            "me3",
+            "ME3 引擎",
+            "pass",
+            format!("已找到 {}", me3_exe.to_string_lossy()),
+        ),
+        Err(error) => add_preflight_check(&mut checks, "me3", "ME3 引擎", "error", error),
+    }
+
+    if game_valid {
+        match resolve_launch_exe(&config, game_dir) {
+            Ok(launch_exe) => add_preflight_check(
+                &mut checks,
+                "launch_target",
+                "启动目标",
+                "pass",
+                launch_exe.to_string_lossy().to_string(),
+            ),
+            Err(error) => {
+                add_preflight_check(&mut checks, "launch_target", "启动目标", "error", error)
+            }
+        }
+    }
+
+    let tasklist_processes = read_tasklist_processes();
+    if tasklist_processes
+        .iter()
+        .any(|process| process.name.eq_ignore_ascii_case("steam.exe"))
+    {
+        add_preflight_check(
+            &mut checks,
+            "steam",
+            "Steam 状态",
+            "pass",
+            "已检测到 Steam。联机补丁仍应与 Steam 保持相同权限级别。".to_string(),
+        );
+    } else {
+        add_preflight_check(
+            &mut checks,
+            "steam",
+            "Steam 状态",
+            "warning",
+            "未检测到 Steam。若出现“Steam is not launched”，请先启动 Steam，并尽量让 Steam、管理器和游戏使用相同权限级别。".to_string(),
+        );
+    }
+
+    let running = format_guarded_processes(&tasklist_processes);
+    if running.is_empty() {
+        add_preflight_check(
+            &mut checks,
+            "running_processes",
+            "重复启动保护",
+            "pass",
+            "没有残留的游戏或 ME3 注入进程".to_string(),
+        );
+    } else {
+        add_preflight_check(
+            &mut checks,
+            "running_processes",
+            "重复启动保护",
+            "error",
+            format!("请先关闭：{}", running.join(", ")),
+        );
+    }
+
+    if game_valid {
+        let status = build_special_mod_status(game_dir);
+        add_preflight_check(
+            &mut checks,
+            "seamless",
+            "SeamlessCoop",
+            if status.seamless_installed {
+                "pass"
+            } else {
+                "warning"
+            },
+            if status.seamless_installed {
+                "nrsc.dll 与设置文件齐全；生成 profile 时会将 nrsc.dll 设为 early load。"
+                    .to_string()
+            } else {
+                "未完整检测到 SeamlessCoop；只玩离线 Mod 时可忽略，联机前请补齐。".to_string()
+            },
+        );
+        add_preflight_check(
+            &mut checks,
+            "onlinefix",
+            "OnlineFix / Spacewar",
+            if status.onlinefix_installed {
+                "pass"
+            } else {
+                "warning"
+            },
+            if status.onlinefix_installed {
+                "OnlineFix 核心文件齐全。".to_string()
+            } else {
+                format!(
+                    "联机补丁文件不完整：{}",
+                    if status.missing_game_files.is_empty() {
+                        "请重新选择补丁 Game 文件夹".to_string()
+                    } else {
+                        status.missing_game_files.join(", ")
+                    }
+                )
+            },
+        );
+        add_preflight_check(
+            &mut checks,
+            "nighter",
+            "深夜解锁",
+            if status.nighter_available {
+                "pass"
+            } else {
+                "warning"
+            },
+            if status.nighter_available {
+                format!("已检测到 {}", status.nighter_path)
+            } else {
+                "未检测到 nighter.dll；不使用深夜解锁时可忽略。".to_string()
+            },
+        );
+
+        match collect_mods() {
+            Ok(mods) => {
+                let enabled = mods.iter().filter(|item| item.enabled).count();
+                let packages = mods
+                    .iter()
+                    .filter(|item| item.enabled && item.mod_type == "package")
+                    .count();
+                let natives = mods
+                    .iter()
+                    .filter(|item| item.enabled && item.mod_type == "native")
+                    .count();
+                add_preflight_check(
+                    &mut checks,
+                    "enabled_mods",
+                    "当前 Mod",
+                    if enabled > 0 { "pass" } else { "warning" },
+                    if enabled > 0 {
+                        format!("将加载 {enabled} 个 Mod：{packages} 个资源包，{natives} 个 DLL")
+                    } else {
+                        "没有启用的 Mod；启动后只会尝试加载游戏根目录中的联机 DLL。".to_string()
+                    },
+                );
+            }
+            Err(error) => add_preflight_check(
+                &mut checks,
+                "enabled_mods",
+                "当前 Mod",
+                "warning",
+                format!("扫描失败：{error}"),
+            ),
+        }
+    }
+
+    Ok(LaunchPreflight {
+        ready: !checks.iter().any(|check| check.status == "error"),
+        checks,
+    })
+}
+
+fn add_preflight_check(
+    checks: &mut Vec<LaunchPreflightCheck>,
+    id: &str,
+    label: &str,
+    status: &str,
+    message: String,
+) {
+    checks.push(LaunchPreflightCheck {
+        id: id.to_string(),
+        label: label.to_string(),
+        status: status.to_string(),
+        message,
+    });
+}
+
+#[command]
 pub fn install_seamless_onlinefix(patch_game_path: String) -> Result<SpecialModStatus, String> {
     let config = load_config();
     if config.game_path.trim().is_empty() {
@@ -858,46 +1129,71 @@ pub fn install_seamless_onlinefix(patch_game_path: String) -> Result<SpecialModS
     validate_game_dir(game_dir)?;
 
     let patch_source = Path::new(patch_game_path.trim());
-    validate_patch_source(&patch_source)?;
+    validate_patch_source(patch_source)?;
 
-    copy_patch_tree(&patch_source, game_dir)?;
+    copy_patch_tree(patch_source, game_dir)?;
     Ok(build_special_mod_status(game_dir))
 }
 
 #[command]
-pub fn detect_file_conflicts() -> Result<Vec<FileConflict>, String> {
-    let mods = collect_mods()?;
-    let mut owners_by_path: BTreeMap<String, Vec<ConflictOwner>> = BTreeMap::new();
+pub async fn detect_file_conflicts() -> Result<Vec<FileConflict>, String> {
+    tauri::async_runtime::spawn_blocking(detect_file_conflicts_blocking)
+        .await
+        .map_err(|error| format!("冲突分析任务异常结束：{error}"))?
+}
 
-    for mod_info in mods.iter().filter(|mod_info| mod_info.enabled) {
+fn detect_file_conflicts_blocking() -> Result<Vec<FileConflict>, String> {
+    let mods = collect_mods()?;
+    let enabled_mods = mods
+        .iter()
+        .filter(|mod_info| mod_info.enabled)
+        .collect::<Vec<_>>();
+    let mut first_owner_by_path: HashMap<String, usize> = HashMap::new();
+    let mut conflict_owners_by_path: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+    let mut scanned_files = 0usize;
+
+    for (mod_index, mod_info) in enabled_mods.iter().enumerate() {
         let mod_dir = Path::new(&mod_info.path);
         let (packages, natives) = collect_entries_for_mod(mod_dir)?;
 
         for package in packages {
-            collect_conflict_package_files(&package.path, mod_info, &mut owners_by_path);
+            collect_conflict_package_files(
+                &package.path,
+                mod_index,
+                &mut first_owner_by_path,
+                &mut conflict_owners_by_path,
+                &mut scanned_files,
+            )?;
         }
 
         for native in natives {
             if let Some(file_name) = native.path.file_name().and_then(|name| name.to_str()) {
-                push_conflict_owner(
-                    &mut owners_by_path,
+                record_conflict_candidate(
                     format!("native/{file_name}").to_lowercase(),
-                    ConflictOwner {
-                        mod_id: mod_info.id.clone(),
-                        mod_name: mod_info.name.clone(),
-                        source_path: native.path.to_string_lossy().to_string(),
-                    },
-                );
+                    mod_index,
+                    &mut first_owner_by_path,
+                    &mut conflict_owners_by_path,
+                    &mut scanned_files,
+                )?;
             }
         }
     }
 
-    Ok(owners_by_path
+    Ok(conflict_owners_by_path
         .into_iter()
-        .filter(|(_, owners)| owners.len() > 1)
-        .map(|(relative_path, owners)| FileConflict {
+        .map(|(relative_path, owner_indexes)| FileConflict {
             relative_path,
-            owners,
+            owners: owner_indexes
+                .into_iter()
+                .map(|owner_index| {
+                    let mod_info = enabled_mods[owner_index];
+                    ConflictOwner {
+                        mod_id: mod_info.id.clone(),
+                        mod_name: mod_info.name.clone(),
+                        source_path: mod_info.path.clone(),
+                    }
+                })
+                .collect(),
         })
         .collect())
 }
@@ -916,10 +1212,13 @@ fn mods_selected_for_generation(mods: &[ModInfo]) -> Vec<&ModInfo> {
                 .into_iter()
                 .filter_map(|profile_mod| mods.iter().find(|item| item.id == profile_mod.mod_id))
                 .collect::<Vec<_>>();
-            for mod_info in mods
-                .iter()
-                .filter(|item| item.enabled && !active_profile.mods.iter().any(|profile_mod| profile_mod.mod_id == item.id))
-            {
+            for mod_info in mods.iter().filter(|item| {
+                item.enabled
+                    && !active_profile
+                        .mods
+                        .iter()
+                        .any(|profile_mod| profile_mod.mod_id == item.id)
+            }) {
                 selected.push(mod_info);
             }
             return selected;
@@ -1029,12 +1328,26 @@ pub fn diagnose_launch_game(game_path: String, me3_path: String) -> Result<Strin
     let args = build_launch_args(&profile_path, &launch_exe);
     let working_dir = me3_exe.parent().unwrap_or_else(|| Path::new(&me3_path));
     let command_line = format_command_line(&me3_exe, &args, working_dir);
+    append_launch_log(&format!(
+        "\n=== Diagnose {} ===\n{}\n",
+        current_timestamp(),
+        command_line
+    ));
+    let log_path = get_launch_log_path();
+    let log_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("无法打开诊断日志：{e}"))?;
+    let stdout_log = log_file
+        .try_clone()
+        .map_err(|e| format!("无法复制诊断日志句柄：{e}"))?;
 
     let mut child = std::process::Command::new(&me3_exe)
         .args(&args)
         .current_dir(working_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(log_file))
         .spawn()
         .map_err(|e| format!("无法启动 ME3：{e}\n\n命令：{command_line}"))?;
 
@@ -1044,28 +1357,23 @@ pub fn diagnose_launch_game(game_path: String, me3_path: String) -> Result<Strin
             .try_wait()
             .map_err(|e| format!("检查 ME3 状态失败：{e}\n\n命令：{command_line}"))?
         {
-            let stdout = read_child_pipe(child.stdout.take());
-            let stderr = read_child_pipe(child.stderr.take());
-
             if status.success() {
                 return Ok(format!("ME3 已完成启动流程。\n命令：{command_line}"));
             }
 
+            let log_excerpt = read_text_tail(&log_path, 64 * 1024)
+                .unwrap_or_else(|error| format!("无法读取诊断日志：{error}"));
+
             return Err(format!(
-                "ME3 启动失败，退出码：{}\n\n命令：{}\n\nstdout:\n{}\n\nstderr:\n{}",
+                "ME3 启动失败，退出码：{}\n\n命令：{}\n\n日志末尾：\n{}",
                 status
                     .code()
                     .map_or_else(|| "unknown".to_string(), |code| code.to_string()),
                 command_line,
-                if stdout.trim().is_empty() {
+                if log_excerpt.trim().is_empty() {
                     "(empty)"
                 } else {
-                    stdout.trim()
-                },
-                if stderr.trim().is_empty() {
-                    "(empty)"
-                } else {
-                    stderr.trim()
+                    log_excerpt.trim()
                 },
             ));
         }
@@ -1120,9 +1428,8 @@ fn launch_via_script(script_path: &Path) -> Result<(), String> {
 }
 
 fn append_launch_log(message: &str) {
-    use std::io::Write;
-
     let log_path = get_launch_log_path();
+    rotate_launch_log_if_needed(&log_path);
     if let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1132,12 +1439,64 @@ fn append_launch_log(message: &str) {
     }
 }
 
+fn rotate_launch_log_if_needed(log_path: &Path) {
+    let Ok(metadata) = fs::metadata(log_path) else {
+        return;
+    };
+    if metadata.len() < MAX_LAUNCH_LOG_BYTES {
+        return;
+    }
+
+    let rotated_path = log_path.with_extension("log.1");
+    if rotated_path.exists() {
+        let _ = fs::remove_file(&rotated_path);
+    }
+    let _ = fs::rename(log_path, rotated_path);
+}
+
 fn read_optional_text(path: &Path) -> Result<String, String> {
     if !path.exists() {
         return Ok(String::new());
     }
 
     fs::read_to_string(path).map_err(|e| format!("读取文件失败：{}，{}", path.to_string_lossy(), e))
+}
+
+fn read_text_tail(path: &Path, max_bytes: u64) -> Result<String, String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+
+    let mut file =
+        File::open(path).map_err(|e| format!("读取文件失败：{}，{e}", path.to_string_lossy()))?;
+    let length = file
+        .metadata()
+        .map_err(|e| format!("读取文件元数据失败：{}，{e}", path.to_string_lossy()))?
+        .len();
+    let start = length.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| format!("定位文件失败：{}，{e}", path.to_string_lossy()))?;
+
+    let mut bytes = Vec::with_capacity((length - start) as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("读取文件失败：{}，{e}", path.to_string_lossy()))?;
+
+    if start > 0 {
+        if let Some(newline) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=newline);
+        }
+    }
+
+    let content = String::from_utf8_lossy(&bytes);
+    if start > 0 {
+        Ok(format!(
+            "[日志已截断，仅显示最后 {} KB]\n{}",
+            max_bytes / 1024,
+            content
+        ))
+    } else {
+        Ok(content.into_owned())
+    }
 }
 
 fn build_launch_args(profile_path: &Path, launch_exe: &Path) -> Vec<String> {
@@ -1175,19 +1534,6 @@ fn quote_arg(value: &str) -> String {
     }
 }
 
-fn read_child_pipe<T>(pipe: Option<T>) -> String
-where
-    T: Read,
-{
-    let Some(mut pipe) = pipe else {
-        return String::new();
-    };
-
-    let mut output = String::new();
-    let _ = pipe.read_to_string(&mut output);
-    output
-}
-
 fn ensure_no_running_game_processes() -> Result<(), String> {
     let running = running_game_processes();
     if running.is_empty() {
@@ -1195,13 +1541,28 @@ fn ensure_no_running_game_processes() -> Result<(), String> {
     }
 
     Err(format!(
-        "检测到仍在运行的游戏/注入进程：{}。\n请先关闭游戏窗口和 ME3 控制台，确认任务管理器里没有 nightreign.exe 或 me3-launcher.exe 后再启动。",
+        "检测到仍在运行的游戏/注入进程：{}。\n如果刚执行过“启动游戏并诊断”，游戏已经启动，无需再次点击普通启动。否则请先关闭游戏窗口和 ME3 控制台后重试。",
         running.join(", ")
     ))
 }
 
 #[cfg(windows)]
 fn running_game_processes() -> Vec<String> {
+    format_guarded_processes(&read_tasklist_processes())
+}
+
+#[cfg(not(windows))]
+fn running_game_processes() -> Vec<String> {
+    Vec::new()
+}
+
+#[cfg(test)]
+fn parse_tasklist_game_processes(stdout: &str) -> Vec<String> {
+    format_guarded_processes(&parse_tasklist_processes(stdout))
+}
+
+#[cfg(windows)]
+fn read_tasklist_processes() -> Vec<TasklistProcess> {
     let Ok(output) = std::process::Command::new("tasklist")
         .args(["/FO", "CSV", "/NH"])
         .output()
@@ -1209,17 +1570,48 @@ fn running_game_processes() -> Vec<String> {
         return Vec::new();
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    ["nightreign.exe", "me3-launcher.exe"]
-        .iter()
-        .filter(|process_name| stdout.to_lowercase().contains(&process_name.to_lowercase()))
-        .map(|process_name| process_name.to_string())
-        .collect()
+    parse_tasklist_processes(&String::from_utf8_lossy(&output.stdout))
 }
 
 #[cfg(not(windows))]
-fn running_game_processes() -> Vec<String> {
+fn read_tasklist_processes() -> Vec<TasklistProcess> {
     Vec::new()
+}
+
+fn parse_tasklist_processes(stdout: &str) -> Vec<TasklistProcess> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(',');
+            let name = fields.next()?.trim().trim_matches('"');
+            let pid = fields.next()?.trim().trim_matches('"');
+            (!name.is_empty()).then(|| TasklistProcess {
+                name: name.to_string(),
+                pid: pid.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn format_guarded_processes(processes: &[TasklistProcess]) -> Vec<String> {
+    processes
+        .iter()
+        .filter(|process| {
+            process.name.eq_ignore_ascii_case("nightreign.exe")
+                || process.name.eq_ignore_ascii_case("me3-launcher.exe")
+        })
+        .map(|process| {
+            if process
+                .pid
+                .chars()
+                .all(|character| character.is_ascii_digit())
+            {
+                format!("{} (PID {})", process.name, process.pid)
+            } else {
+                process.name.clone()
+            }
+        })
+        .collect()
 }
 
 fn resolve_launch_exe(config: &AppConfig, game_dir: &Path) -> Result<PathBuf, String> {
@@ -1234,7 +1626,7 @@ fn resolve_launch_exe(config: &AppConfig, game_dir: &Path) -> Result<PathBuf, St
     if launch_exe
         .file_name()
         .and_then(|name| name.to_str())
-        .map_or(false, |name| name.eq_ignore_ascii_case("nrsc_launcher.exe"))
+        .is_some_and(|name| name.eq_ignore_ascii_case("nrsc_launcher.exe"))
     {
         let game_exe = game_dir.join("nightreign.exe");
         validate_launch_exe(&game_exe, game_dir)?;
@@ -1347,9 +1739,8 @@ fn copy_patch_tree(patch_source: &Path, game_dir: &Path) -> Result<(), String> {
         let target = game_dir.join(&relative_path);
 
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                format!("创建目录失败：{}，{}", parent.to_string_lossy(), e)
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("创建目录失败：{}，{}", parent.to_string_lossy(), e))?;
         }
 
         fs::copy(&source, &target).map_err(|e| {
@@ -1377,7 +1768,7 @@ fn validate_launch_exe(launch_exe: &Path, game_dir: &Path) -> Result<(), String>
     if !launch_exe
         .extension()
         .and_then(|ext| ext.to_str())
-        .map_or(false, |ext| ext.eq_ignore_ascii_case("exe"))
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
     {
         return Err("启动程序必须是 .exe 文件".to_string());
     }
@@ -1417,7 +1808,7 @@ fn collect_entries_for_mod(
         if mod_dir
             .extension()
             .and_then(|ext| ext.to_str())
-            .map_or(false, |ext| ext.eq_ignore_ascii_case("dll"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
         {
             let resolved = fs::canonicalize(mod_dir).unwrap_or_else(|_| mod_dir.to_path_buf());
             return Ok((
@@ -1589,13 +1980,39 @@ fn toml_string(path: &Path) -> String {
 }
 
 fn has_dll_file(path: &Path) -> bool {
-    !find_dll_files(path).is_empty()
+    contains_file_with_extension(path, "dll", 0)
+}
+
+fn contains_file_with_extension(path: &Path, extension: &str, depth: usize) -> bool {
+    if depth > MAX_SCAN_DEPTH {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if contains_file_with_extension(&path, extension, depth + 1) {
+                return true;
+            }
+        } else if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn is_dll_or_disabled_dll(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map_or(false, |name| {
+        .is_some_and(|name| {
             let lower = name.to_lowercase();
             lower.ends_with(".dll") || lower.ends_with(".dll.disabled")
         })
@@ -1650,9 +2067,7 @@ fn find_sidecar_config_files(path: &Path) -> Vec<PathBuf> {
 fn is_editable_config_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map_or(false, |ext| {
-            ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("ini")
-        })
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json") || ext.eq_ignore_ascii_case("ini"))
 }
 
 fn same_path_string(left: &str, right: &str) -> bool {
@@ -1684,8 +2099,8 @@ fn normalize_windows_path_string(path: &str) -> String {
 }
 
 fn validate_editable_config_path(path: &str) -> Result<PathBuf, String> {
-    let config_path = fs::canonicalize(Path::new(path.trim()))
-        .map_err(|e| format!("配置文件不存在：{e}"))?;
+    let config_path =
+        fs::canonicalize(Path::new(path.trim())).map_err(|e| format!("配置文件不存在：{e}"))?;
     if !config_path.is_file() || !is_editable_config_extension(&config_path) {
         return Err("只能编辑 JSON 或 INI 配置文件".to_string());
     }
@@ -1707,6 +2122,18 @@ fn validate_editable_config_path(path: &str) -> Result<PathBuf, String> {
 }
 
 fn collect_files_with_extension(path: &Path, extension: &str, files: &mut Vec<PathBuf>) {
+    collect_files_with_extension_inner(path, extension, files, 0);
+}
+
+fn collect_files_with_extension_inner(
+    path: &Path,
+    extension: &str,
+    files: &mut Vec<PathBuf>,
+    depth: usize,
+) {
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
     let Ok(entries) = fs::read_dir(path) else {
         return;
     };
@@ -1714,11 +2141,11 @@ fn collect_files_with_extension(path: &Path, extension: &str, files: &mut Vec<Pa
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_files_with_extension(&path, extension, files);
+            collect_files_with_extension_inner(&path, extension, files, depth + 1);
         } else if path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map_or(false, |ext| ext.eq_ignore_ascii_case(extension))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
         {
             files.push(normalize_windows_path_buf(
                 fs::canonicalize(&path).unwrap_or(path),
@@ -1729,26 +2156,53 @@ fn collect_files_with_extension(path: &Path, extension: &str, files: &mut Vec<Pa
 
 fn collect_conflict_package_files(
     package_root: &Path,
-    mod_info: &ModInfo,
-    owners_by_path: &mut BTreeMap<String, Vec<ConflictOwner>>,
-) {
-    collect_conflict_package_files_inner(package_root, package_root, mod_info, owners_by_path);
+    mod_index: usize,
+    first_owner_by_path: &mut HashMap<String, usize>,
+    conflict_owners_by_path: &mut BTreeMap<String, BTreeSet<usize>>,
+    scanned_files: &mut usize,
+) -> Result<(), String> {
+    collect_conflict_package_files_inner(
+        package_root,
+        package_root,
+        mod_index,
+        first_owner_by_path,
+        conflict_owners_by_path,
+        scanned_files,
+        0,
+    )
 }
 
 fn collect_conflict_package_files_inner(
     package_root: &Path,
     current_dir: &Path,
-    mod_info: &ModInfo,
-    owners_by_path: &mut BTreeMap<String, Vec<ConflictOwner>>,
-) {
+    mod_index: usize,
+    first_owner_by_path: &mut HashMap<String, usize>,
+    conflict_owners_by_path: &mut BTreeMap<String, BTreeSet<usize>>,
+    scanned_files: &mut usize,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_SCAN_DEPTH {
+        return Err(format!(
+            "冲突分析已停止：目录嵌套超过安全上限 {}",
+            MAX_SCAN_DEPTH
+        ));
+    }
     let Ok(entries) = fs::read_dir(current_dir) else {
-        return;
+        return Ok(());
     };
 
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_conflict_package_files_inner(package_root, &path, mod_info, owners_by_path);
+            collect_conflict_package_files_inner(
+                package_root,
+                &path,
+                mod_index,
+                first_owner_by_path,
+                conflict_owners_by_path,
+                scanned_files,
+                depth + 1,
+            )?;
             continue;
         }
 
@@ -1764,28 +2218,57 @@ fn collect_conflict_package_files_inner(
             continue;
         }
 
-        push_conflict_owner(
-            owners_by_path,
+        record_conflict_candidate(
             relative_path.to_lowercase(),
-            ConflictOwner {
-                mod_id: mod_info.id.clone(),
-                mod_name: mod_info.name.clone(),
-                source_path: path.to_string_lossy().to_string(),
-            },
-        );
+            mod_index,
+            first_owner_by_path,
+            conflict_owners_by_path,
+            scanned_files,
+        )?;
     }
+
+    Ok(())
 }
 
-fn push_conflict_owner(
-    owners_by_path: &mut BTreeMap<String, Vec<ConflictOwner>>,
+fn record_conflict_candidate(
     relative_path: String,
-    owner: ConflictOwner,
-) {
-    let owners = owners_by_path.entry(relative_path).or_default();
-    if owners.iter().any(|item| item.mod_id == owner.mod_id) {
-        return;
+    mod_index: usize,
+    first_owner_by_path: &mut HashMap<String, usize>,
+    conflict_owners_by_path: &mut BTreeMap<String, BTreeSet<usize>>,
+    scanned_files: &mut usize,
+) -> Result<(), String> {
+    *scanned_files += 1;
+    if *scanned_files > MAX_CONFLICT_FILES_SCANNED {
+        return Err(format!(
+            "冲突分析已停止：文件数量超过安全上限 {}，请减少启用的 Mod 后重试",
+            MAX_CONFLICT_FILES_SCANNED
+        ));
     }
-    owners.push(owner);
+
+    match first_owner_by_path.entry(relative_path) {
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(mod_index);
+        }
+        std::collections::hash_map::Entry::Occupied(entry) => {
+            let first_owner = *entry.get();
+            if first_owner != mod_index {
+                let owners = conflict_owners_by_path
+                    .entry(entry.key().clone())
+                    .or_default();
+                owners.insert(first_owner);
+                owners.insert(mod_index);
+
+                if conflict_owners_by_path.len() > MAX_CONFLICT_RESULTS {
+                    return Err(format!(
+                        "冲突分析已停止：冲突数量超过安全上限 {}",
+                        MAX_CONFLICT_RESULTS
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn normalize_relative_path(path: &Path) -> String {
@@ -1817,14 +2300,14 @@ fn has_package_like_content(path: &Path) -> bool {
                 e.path()
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .map_or(false, |ext| ext.eq_ignore_ascii_case("dcx"))
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("dcx"))
             })
 }
 
 fn is_disabled_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map_or(false, |name| name.ends_with(".disabled"))
+        .is_some_and(|name| name.ends_with(".disabled"))
 }
 
 fn strip_disabled_suffix(name: &str) -> &str {
@@ -1962,5 +2445,93 @@ load_early = true
 
         assert_eq!(packages.len(), 1);
         assert!(natives.is_empty());
+    }
+
+    #[test]
+    fn managed_mod_path_must_be_a_direct_child() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_path_test_{}",
+            current_timestamp()
+        ));
+        let direct_mod = root.join("direct-mod");
+        let nested_mod = direct_mod.join("nested-mod");
+        fs::create_dir_all(&nested_mod).unwrap();
+
+        assert_eq!(
+            validate_direct_child(&root, &direct_mod).unwrap(),
+            fs::canonicalize(&direct_mod).unwrap()
+        );
+        assert!(validate_direct_child(&root, &nested_mod).is_err());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn conflict_index_keeps_only_compact_owner_indexes() {
+        let mut first_owners = HashMap::new();
+        let mut conflicts = BTreeMap::new();
+        let mut scanned = 0;
+
+        record_conflict_candidate(
+            "parts/example.dcx".to_string(),
+            0,
+            &mut first_owners,
+            &mut conflicts,
+            &mut scanned,
+        )
+        .unwrap();
+        record_conflict_candidate(
+            "parts/example.dcx".to_string(),
+            1,
+            &mut first_owners,
+            &mut conflicts,
+            &mut scanned,
+        )
+        .unwrap();
+
+        assert_eq!(first_owners.len(), 1);
+        assert_eq!(conflicts["parts/example.dcx"], BTreeSet::from([0, 1]));
+    }
+
+    #[test]
+    fn launch_log_reader_only_keeps_the_requested_tail() {
+        let log_path = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_log_test_{}.log",
+            current_timestamp()
+        ));
+        let content = (0..100)
+            .map(|index| format!("launch-line-{index:03}\n"))
+            .collect::<String>();
+        fs::write(&log_path, content).unwrap();
+
+        let tail = read_text_tail(&log_path, 96).unwrap();
+        let _ = fs::remove_file(&log_path);
+
+        assert!(tail.starts_with("[日志已截断"));
+        assert!(tail.contains("launch-line-099"));
+        assert!(!tail.contains("launch-line-000"));
+        assert!(tail.len() < 256);
+    }
+
+    #[test]
+    fn tasklist_parser_matches_only_exact_guarded_process_names() {
+        let output = concat!(
+            "\"nightreign-mod-manager.exe\",\"100\",\"Console\",\"1\",\"10,000 K\"\n",
+            "\"nightreign.exe\",\"200\",\"Console\",\"1\",\"500,000 K\"\n",
+            "\"me3-launcher.exe\",\"300\",\"Console\",\"1\",\"20,000 K\"\n",
+            "\"steam.exe\",\"350\",\"Console\",\"1\",\"100,000 K\"\n",
+            "\"unrelated.exe\",\"400\",\"Console\",\"1\",\"5,000 K\"\n",
+        );
+
+        assert_eq!(
+            parse_tasklist_game_processes(output),
+            vec![
+                "nightreign.exe (PID 200)".to_string(),
+                "me3-launcher.exe (PID 300)".to_string(),
+            ]
+        );
+        assert!(parse_tasklist_processes(output)
+            .iter()
+            .any(|process| process.name.eq_ignore_ascii_case("steam.exe")));
     }
 }

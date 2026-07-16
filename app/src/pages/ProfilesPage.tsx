@@ -51,8 +51,8 @@ export function ProfilesPage({
       title="配置方案"
       description="方案保存 Mod 启用快照和加载顺序。拖拽右侧条目可以调整当前方案的加载顺序。"
     >
-      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[22rem_1fr]">
-        <section className="flex min-h-0 flex-col rounded-xl border border-border bg-panel">
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+        <section className="panel-card flex min-h-0 flex-col rounded-xl">
           <div className="flex shrink-0 items-center justify-between border-b border-border p-4">
             <h2 className="text-base font-semibold text-text-primary">方案列表</h2>
             <button
@@ -112,7 +112,7 @@ export function ProfilesPage({
           </div>
         </section>
 
-        <section className="flex min-h-0 flex-col rounded-xl border border-border bg-panel">
+        <section className="panel-card flex min-h-0 flex-col rounded-xl">
           <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border p-5">
             <div>
               <h2 className="text-lg font-semibold text-text-primary">
@@ -153,7 +153,7 @@ export function ProfilesPage({
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => handleDrop(item.modId)}
                     onDragEnd={() => setDraggedModId(null)}
-                    className={`grid cursor-grab grid-cols-[3rem_1fr_auto] items-center gap-3 rounded-lg border px-4 py-3 transition-colors active:cursor-grabbing ${
+                    className={`grid cursor-grab grid-cols-[2.5rem_1fr_auto] items-center gap-3 rounded-lg border px-3.5 py-3 transition-all active:cursor-grabbing ${
                       draggedModId === item.modId
                         ? "border-accent bg-accent-soft"
                         : "border-border bg-surface hover:border-accent/35"

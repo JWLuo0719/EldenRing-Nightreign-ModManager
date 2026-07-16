@@ -1,4 +1,5 @@
-import type { ModInfo, Profile, SpecialModStatus } from "../types/mod";
+import { useState } from "react";
+import type { LaunchPreflight, LaunchPreflightCheck, ModInfo, Profile, SpecialModStatus } from "../types/mod";
 import type { ReactNode } from "react";
 
 interface LaunchPageProps {
@@ -10,6 +11,7 @@ interface LaunchPageProps {
   specialModStatus: SpecialModStatus | null;
   busy: boolean;
   onLaunch: () => void;
+  onPreflight: () => Promise<LaunchPreflight | undefined>;
   onRefresh: () => void;
   onOpenDiagnostics: () => void;
   onPrepareOnline: () => void;
@@ -24,10 +26,12 @@ export function LaunchPage({
   specialModStatus,
   busy,
   onLaunch,
+  onPreflight,
   onRefresh,
   onOpenDiagnostics,
   onPrepareOnline,
 }: LaunchPageProps) {
+  const [preflight, setPreflight] = useState<LaunchPreflight | null>(null);
   const enabledMods = mods.filter((mod) => mod.enabled);
   const launchTarget = launchExePath.trim()
     ? launchExePath.split(/[\\/]/).pop() || "自定义启动程序"
@@ -36,100 +40,142 @@ export function LaunchPage({
     specialModStatus?.seamlessInstalled && specialModStatus.onlinefixInstalled
   );
 
+  const runPreflight = async () => {
+    const result = await onPreflight();
+    if (result) {
+      setPreflight(result);
+    }
+  };
+
   return (
     <PageFrame
       eyebrow="Launch Center"
       title="启动台"
       description="从这里确认环境状态、生成当前方案并通过 ME3 启动 Nightreign。"
     >
-      <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto pr-1 xl:grid-cols-[1.2fr_0.8fr]">
-        <section className="rounded-xl border border-border bg-panel p-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-sm text-text-muted">当前配置方案</div>
-              <h2 className="mt-2 text-3xl font-bold text-text-primary">
-                {activeProfile?.name ?? "全局启用状态"}
-              </h2>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-text-secondary">
-                启动时会先生成 active-nightreign.me3，再执行 launch-nightreign.bat。
-                当前目标程序：{launchTarget}。
-              </p>
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_19rem]">
+          <section className="panel-card relative overflow-hidden rounded-xl p-5">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-accent via-accent/35 to-transparent" />
+            <div className="section-label">Ready to deploy</div>
+            <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="truncate text-2xl font-bold tracking-tight text-text-primary">
+                  {activeProfile?.name ?? "全局启用状态"}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-text-secondary">
+                  将生成 ME3 Profile，并以 <span className="font-semibold text-text-primary">{launchTarget}</span> 启动。
+                </p>
+              </div>
+              <div className="flex items-baseline gap-2 text-text-muted">
+                <span className="display-number text-4xl font-semibold text-accent">{enabledMods.length}</span>
+                <span className="text-xs">个 Mod 待加载</span>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-2 sm:grid-cols-3">
+              <Metric label="启用 / 全部" value={`${enabledMods.length} / ${mods.length}`} />
+              <Metric label="资源包" value={String(mods.filter((mod) => mod.type === "package").length)} />
+              <Metric label="原生 DLL" value={String(mods.filter((mod) => mod.type === "native").length)} />
+            </div>
+
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              <StatusRow label="游戏目录" value={gamePath || "未配置"} ok={Boolean(gamePath)} />
+              <StatusRow label="ME3 目录" value={me3Path || "未配置"} ok={Boolean(me3Path)} />
+            </div>
+          </section>
+
+          <section className="panel-card rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="section-label text-text-muted">Command</div>
+                <h3 className="mt-1 text-base font-semibold text-text-primary">启动控制</h3>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onRefresh}
+                className="rounded-md px-2 py-1 text-xs font-medium text-text-muted transition-colors hover:bg-surface hover:text-text-primary disabled:opacity-50"
+              >
+                刷新状态
+              </button>
             </div>
             <button
               type="button"
               disabled={busy}
               onClick={onLaunch}
-              className="rounded-lg bg-accent px-6 py-3 text-sm font-bold text-black transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-4 flex w-full items-center justify-between rounded-lg bg-accent px-4 py-3.5 text-left text-sm font-bold text-black transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
-              启动游戏
+              <span>启动 Nightreign</span>
+              <PlayArrow />
             </button>
-          </div>
-
-          <div className="mt-8 grid gap-3 md:grid-cols-3">
-            <Metric label="启用 Mod" value={`${enabledMods.length}/${mods.length}`} />
-            <Metric label="资源包" value={String(mods.filter((mod) => mod.type === "package").length)} />
-            <Metric label="DLL" value={String(mods.filter((mod) => mod.type === "native").length)} />
-          </div>
-
-          <div className="mt-8 grid gap-3">
-            <StatusRow label="游戏目录" value={gamePath || "未配置"} ok={Boolean(gamePath)} />
-            <StatusRow label="ME3 目录" value={me3Path || "未配置"} ok={Boolean(me3Path)} />
-            <StatusRow
-              label="联机环境"
-              value={
-                onlineReady
-                  ? "SeamlessCoop 与 OnlineFix 已在当前游戏目录就绪"
-                  : "当前游戏目录缺少 SeamlessCoop 或 OnlineFix 文件"
-              }
-              ok={onlineReady}
-            />
-            <StatusRow
-              label="Nighter 深夜解锁"
-              value={
-                specialModStatus?.nighterAvailable
-                  ? specialModStatus.nighterPath
-                  : "未检测到 Game\\mods\\nighter.dll"
-              }
-              ok={Boolean(specialModStatus?.nighterAvailable)}
-            />
-          </div>
-        </section>
-
-        <aside className="flex min-h-0 flex-col gap-4">
-          <section className="rounded-xl border border-border bg-panel p-5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-text-primary">快速操作</h3>
+            <div className="mt-2 grid gap-2">
               <button
                 type="button"
                 disabled={busy}
-                onClick={onRefresh}
-                className="text-sm font-medium text-accent hover:text-accent-hover disabled:opacity-50"
+                onClick={() => void runPreflight()}
+                className="rounded-lg border border-accent/35 bg-accent-soft px-3.5 py-2.5 text-left text-sm font-semibold text-accent transition-colors hover:border-accent/65 disabled:opacity-50"
               >
-                刷新
+                启动前检查 <span className="font-normal text-text-muted">· 不启动游戏</span>
               </button>
-            </div>
-            <div className="mt-4 grid gap-2">
-              <button
-                type="button"
-                onClick={onOpenDiagnostics}
-                className="rounded-lg border border-border bg-surface px-4 py-3 text-left text-sm text-text-secondary transition-colors hover:border-accent/45 hover:text-text-primary"
-              >
-                打开诊断页，查看 ME3 profile、启动命令和诊断输出
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={onPrepareOnline}
-                className="rounded-lg border border-border bg-surface px-4 py-3 text-left text-sm text-text-secondary transition-colors hover:border-accent/45 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                选择补丁 Game 文件夹并应用
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenDiagnostics}
+                  className="rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-xs text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary"
+                >
+                  打开诊断
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onPrepareOnline}
+                  className="rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-xs text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary disabled:opacity-50"
+                >
+                  应用联机补丁
+                </button>
+              </div>
             </div>
           </section>
+        </div>
 
-          <section className="rounded-xl border border-border bg-panel p-5">
-            <h3 className="text-base font-semibold text-text-primary">特殊 Mod 检测</h3>
-            <div className="mt-4 space-y-3">
+        {preflight && (
+          <section className="panel-card mt-4 rounded-xl p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="section-label text-text-muted">Preflight report</div>
+                <h3 className="mt-1 text-base font-semibold text-text-primary">启动前检查</h3>
+              </div>
+              <span
+                className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                  preflight.ready
+                    ? "border-success/25 bg-success/10 text-success"
+                    : "border-danger/25 bg-danger/10 text-danger"
+                }`}
+              >
+                {preflight.ready ? "可以启动" : "需要处理"}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {preflight.checks.map((check) => (
+                <PreflightRow key={check.id} check={check} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_19rem]">
+          <section className="panel-card rounded-xl p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="section-label text-text-muted">Environment</div>
+                <h3 className="mt-1 text-base font-semibold text-text-primary">运行环境</h3>
+              </div>
+              <span className={`text-xs font-semibold ${onlineReady ? "text-success" : "text-warning"}`}>
+                {onlineReady ? "联机组件就绪" : "存在可选组件提醒"}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
               <SpecialRow
                 label="SeamlessCoop"
                 ok={Boolean(specialModStatus?.seamlessInstalled)}
@@ -143,46 +189,66 @@ export function LaunchPage({
               <SpecialRow
                 label="Nighter"
                 ok={Boolean(specialModStatus?.nighterAvailable)}
-                value={specialModStatus?.nighterAvailable ? specialModStatus.nighterPath : "未检测到 Game\\mods\\nighter.dll"}
+                value={specialModStatus?.nighterAvailable ? specialModStatus.nighterPath : "未检测到"}
               />
             </div>
             {specialModStatus && specialModStatus.missingGameFiles.length > 0 && (
-              <p className="mt-4 rounded-lg border border-warning/25 bg-warning/10 p-3 text-xs leading-5 text-warning">
-                当前游戏目录缺少：{specialModStatus.missingGameFiles.join(", ")}
+              <p className="mt-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
+                联机目录缺少：{specialModStatus.missingGameFiles.join(", ")}
               </p>
             )}
           </section>
 
-          <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-border bg-panel p-5">
-            <h3 className="text-center text-base font-semibold text-text-primary">本次将加载</h3>
-            <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+          <section className="panel-card rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-text-primary">本次加载清单</h3>
+              <span className="display-number text-xs text-text-muted">{enabledMods.length}</span>
+            </div>
+            <div className="mt-3 max-h-48 space-y-1.5 overflow-y-auto pr-1">
               {enabledMods.length === 0 ? (
-                <div className="grid h-full min-h-36 place-items-center rounded-lg border border-dashed border-border p-5 text-center">
-                  <p className="max-w-sm text-sm leading-6 text-text-muted">
-                    当前没有启用的 Mod。ME3 profile 仍会尝试加入游戏根目录下的 SeamlessCoop DLL。
-                  </p>
-                </div>
+                <p className="rounded-lg border border-dashed border-border p-3 text-xs leading-5 text-text-muted">
+                  当前没有启用的 Mod，仍会尝试加载游戏根目录中的联机 DLL。
+                </p>
               ) : (
                 enabledMods.map((mod) => (
-                  <div key={mod.id} className="flex min-h-11 items-center justify-between rounded-lg bg-surface px-3 py-2">
-                    <span className="min-w-0 truncate text-sm text-text-secondary">{mod.name}</span>
-                    <span className="ml-3 shrink-0 text-xs text-text-muted">
-                      {mod.type === "native" ? "DLL" : "资源包"}
-                    </span>
+                  <div key={mod.id} className="flex items-center justify-between gap-2 rounded-md bg-surface px-2.5 py-2">
+                    <span className="min-w-0 truncate text-xs text-text-secondary">{mod.name}</span>
+                    <span className="shrink-0 text-[10px] text-text-muted">{mod.type === "native" ? "DLL" : "资源"}</span>
                   </div>
                 ))
               )}
             </div>
           </section>
-        </aside>
+        </div>
       </div>
     </PageFrame>
   );
 }
 
+function PreflightRow({ check }: { check: LaunchPreflightCheck }) {
+  const dotClass =
+    check.status === "pass"
+      ? "bg-success"
+      : check.status === "warning"
+        ? "bg-warning"
+        : "bg-danger";
+
+  return (
+    <div className="rounded-lg border border-border bg-surface/80 px-3 py-2.5">
+      <div className="flex items-start gap-2.5">
+        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-text-primary">{check.label}</div>
+          <div className="mt-1 break-all text-xs leading-5 text-text-muted">{check.message}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SpecialRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
   return (
-    <div className="rounded-lg border border-border bg-surface px-3 py-2">
+    <div className="rounded-lg border border-border bg-surface/80 px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm font-semibold text-text-primary">{label}</span>
         <span className={`h-2 w-2 rounded-full ${ok ? "bg-success" : "bg-danger"}`} />
@@ -206,11 +272,15 @@ export function PageFrame({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden p-6">
-      <header className="mb-4 shrink-0">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-accent">{eyebrow}</div>
-        <h1 className="mt-1.5 text-xl font-bold text-text-primary">{title}</h1>
-        <p className="mt-1.5 max-w-3xl text-sm leading-5 text-text-secondary">{description}</p>
+    <div className="page-enter flex h-full min-h-0 flex-col overflow-hidden px-5 pb-5 pt-4">
+      <header className="mb-4 flex shrink-0 items-end justify-between gap-6 border-b border-border pb-3">
+        <div className="min-w-0">
+          <div className="section-label">{eyebrow}</div>
+          <div className="mt-1.5 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <h1 className="text-xl font-bold tracking-tight text-text-primary">{title}</h1>
+            <p className="max-w-3xl truncate text-xs leading-5 text-text-muted">{description}</p>
+          </div>
+        </div>
       </header>
       {children}
     </div>
@@ -219,21 +289,29 @@ export function PageFrame({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border bg-surface px-4 py-3">
-      <div className="text-xs text-text-muted">{label}</div>
-      <div className="mt-1 text-2xl font-bold text-text-primary">{value}</div>
+    <div className="rounded-lg border border-border bg-surface/75 px-3 py-2.5">
+      <div className="text-[11px] text-text-muted">{label}</div>
+      <div className="display-number mt-1 text-xl font-semibold text-text-primary">{value}</div>
     </div>
   );
 }
 
 function StatusRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-border bg-surface px-4 py-3">
-      <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${ok ? "bg-success" : "bg-danger"}`} />
+    <div className="flex items-start gap-2.5 rounded-lg border border-border bg-surface/75 px-3 py-2.5">
+      <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${ok ? "bg-success" : "bg-danger"}`} />
       <div className="min-w-0">
         <div className="text-sm font-semibold text-text-primary">{label}</div>
-        <div className="mt-1 break-all text-xs leading-5 text-text-muted">{value}</div>
+        <div className="mt-1 truncate text-xs leading-5 text-text-muted" title={value}>{value}</div>
       </div>
     </div>
+  );
+}
+
+function PlayArrow() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </svg>
   );
 }

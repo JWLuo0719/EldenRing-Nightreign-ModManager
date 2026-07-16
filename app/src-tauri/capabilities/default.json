@@ -17,26 +17,6 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "dialog:allow-ask",
-    "dialog:allow-confirm",
-    "fs:default",
-    "fs:allow-exists",
-    "fs:allow-read-file",
-    "fs:allow-write-file",
-    "fs:allow-read-dir",
-    "fs:allow-mkdir",
-    "fs:allow-remove",
-    "fs:allow-rename",
-    "fs:allow-copy-file",
-    "fs:allow-read-text-file",
-    "fs:allow-write-text-file",
-    "fs:scope-appdata",
-    "fs:scope-appdata-recursive",
-    "fs:read-all",
-    "fs:write-all",
-    "shell:default",
-    "shell:allow-execute",
-    "shell:allow-spawn",
-    "shell:allow-stdin-write",
-    "shell:allow-kill"
+    "dialog:allow-confirm"
   ]
 }

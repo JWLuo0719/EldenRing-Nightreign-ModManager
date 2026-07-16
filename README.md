@@ -88,6 +88,8 @@ Rust 检查：
 
 ```powershell
 cd app/src-tauri
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
 cargo check
 cargo test
 ```

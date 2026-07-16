@@ -14,7 +14,8 @@ export function ModCard({ mod, tracked, onToggle, onDelete, onConfigure }: ModCa
   const hasConfig = mod.configFiles.length > 0;
 
   return (
-    <article className={`group rounded-lg border bg-panel p-4 transition-colors hover:border-accent/45 ${mod.enabled ? "border-accent/35" : "border-border"}`}>
+    <article className={`group relative overflow-hidden rounded-lg border bg-surface/55 p-4 transition-all hover:-translate-y-px hover:border-accent/45 hover:bg-surface/80 ${mod.enabled ? "border-accent/30" : "border-border"}`}>
+      {mod.enabled && <span className="absolute inset-y-3 left-0 w-0.5 rounded-full bg-accent" />}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -27,15 +28,15 @@ export function ModCard({ mod, tracked, onToggle, onDelete, onConfigure }: ModCa
             {mod.source === "game_native" && <Badge tone="info">Game\\mods</Badge>}
           </div>
 
-          <h3 className="truncate text-base font-semibold text-text-primary">{mod.name}</h3>
+          <h3 className="truncate text-[15px] font-semibold text-text-primary">{mod.name}</h3>
           <p className="mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-text-secondary">
             {mod.description || "未提供说明。启动前建议确认 Mod 目录结构和依赖项。"}
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-text-muted">
-            {mod.version && <span className="rounded-md bg-surface px-2 py-1">v{mod.version}</span>}
-            <span className="rounded-md bg-surface px-2 py-1">{mod.files.length} 个顶层项</span>
-            <span className="max-w-full truncate rounded-md bg-surface px-2 py-1">{mod.id}</span>
+            {mod.version && <span className="rounded-md bg-elevated px-2 py-1">v{mod.version}</span>}
+            <span className="rounded-md bg-elevated px-2 py-1">{mod.files.length} 个顶层项</span>
+            <span className="max-w-full truncate rounded-md bg-elevated px-2 py-1">{mod.id}</span>
           </div>
         </div>
 
@@ -65,7 +66,11 @@ export function ModCard({ mod, tracked, onToggle, onDelete, onConfigure }: ModCa
             aria-label={mod.enabled ? "停用 Mod" : "启用 Mod"}
           >
             <span
-              className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${mod.enabled ? "translate-x-[20px]" : "translate-x-0.5"}`}
+              className={`absolute left-0 top-0.5 h-6 w-6 rounded-full shadow transition-all ${
+                mod.enabled
+                  ? "translate-x-[20px] bg-white"
+                  : "translate-x-0.5 bg-text-muted"
+              }`}
             />
           </button>
         </div>

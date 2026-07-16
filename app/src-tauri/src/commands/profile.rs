@@ -40,6 +40,24 @@ fn get_active_profile_path() -> PathBuf {
     config_dir.join("active_profile.txt")
 }
 
+fn validate_profile_id(profile_id: &str) -> Result<(), String> {
+    let is_valid = profile_id.starts_with("profile_")
+        && profile_id.len() <= 96
+        && profile_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        });
+    if is_valid {
+        Ok(())
+    } else {
+        Err("配置方案 ID 无效".to_string())
+    }
+}
+
+fn get_profile_path(profile_id: &str) -> Result<PathBuf, String> {
+    validate_profile_id(profile_id)?;
+    Ok(get_profiles_dir().join(format!("{profile_id}.json")))
+}
+
 #[command]
 pub fn get_profiles() -> Vec<Profile> {
     let profiles_dir = get_profiles_dir();
@@ -53,7 +71,7 @@ pub fn get_profiles() -> Vec<Profile> {
     if let Ok(entries) = fs::read_dir(&profiles_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "json") {
+            if path.extension().is_some_and(|ext| ext == "json") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     if let Ok(mut profile) = serde_json::from_str::<Profile>(&content) {
                         profile.is_active = Some(&profile.id) == active_id.as_ref();
@@ -109,8 +127,7 @@ pub fn create_profile(name: String, description: String, icon: String) -> Result
 
 #[command]
 pub fn delete_profile(profile_id: String) -> Result<(), String> {
-    let profiles_dir = get_profiles_dir();
-    let file_path = profiles_dir.join(format!("{}.json", profile_id));
+    let file_path = get_profile_path(&profile_id)?;
 
     if file_path.exists() {
         fs::remove_file(&file_path).map_err(|e| e.to_string())?;
@@ -129,8 +146,7 @@ pub fn delete_profile(profile_id: String) -> Result<(), String> {
 
 #[command]
 pub fn activate_profile(profile_id: String) -> Result<(), String> {
-    let profiles_dir = get_profiles_dir();
-    let file_path = profiles_dir.join(format!("{}.json", profile_id));
+    let file_path = get_profile_path(&profile_id)?;
 
     if !file_path.exists() {
         return Err("配置方案不存在".to_string());
@@ -183,8 +199,7 @@ pub fn update_active_profile_mod(mod_id: String, enabled: bool) -> Result<Option
 }
 
 pub fn load_profile(profile_id: &str) -> Result<Profile, String> {
-    let profiles_dir = get_profiles_dir();
-    let file_path = profiles_dir.join(format!("{}.json", profile_id));
+    let file_path = get_profile_path(profile_id)?;
 
     if !file_path.exists() {
         return Err("配置方案不存在".to_string());
@@ -195,8 +210,7 @@ pub fn load_profile(profile_id: &str) -> Result<Profile, String> {
 }
 
 pub fn save_profile(profile: &Profile) -> Result<(), String> {
-    let profiles_dir = get_profiles_dir();
-    let file_path = profiles_dir.join(format!("{}.json", profile.id));
+    let file_path = get_profile_path(&profile.id)?;
 
     if !file_path.exists() {
         return Err("配置方案不存在".to_string());
@@ -214,4 +228,20 @@ fn chrono_now() -> String {
         .unwrap_or_default()
         .as_secs()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_profile_id;
+
+    #[test]
+    fn accepts_generated_profile_ids() {
+        assert!(validate_profile_id("profile_1779536514777").is_ok());
+    }
+
+    #[test]
+    fn rejects_profile_path_traversal() {
+        assert!(validate_profile_id(r"..\..\outside").is_err());
+        assert!(validate_profile_id("profile_/outside").is_err());
+    }
 }

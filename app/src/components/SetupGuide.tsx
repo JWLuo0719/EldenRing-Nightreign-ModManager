@@ -52,12 +52,10 @@ export function SetupGuide({
   const canSubmit = Boolean(gamePath && me3Path && !busy);
 
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-app px-6 py-8">
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto px-6 py-8">
       <div className="w-full max-w-4xl">
         <div className="mb-8">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-accent">
-            First Run
-          </div>
+          <div className="section-label">First deployment</div>
           <h1 className="mt-3 text-3xl font-bold text-text-primary">完成启动环境配置</h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-text-secondary">
             管理器需要游戏目录和 ME3 目录才能生成 active-nightreign.me3 并通过 ME3 启动。
@@ -100,7 +98,7 @@ export function SetupGuide({
           />
         </div>
 
-        <div className="mt-6 rounded-xl border border-border bg-panel p-4 text-sm leading-6 text-text-secondary">
+        <div className="panel-card mt-6 rounded-xl p-4 text-sm leading-6 text-text-secondary">
           SeamlessCoop/Spacewar 环境下，即使这里选择过 nrsc_launcher.exe，ME3 启动链路也会自动改用
           nightreign.exe，并通过 profile 注入 SeamlessCoop/nrsc.dll。
         </div>
@@ -144,7 +142,7 @@ function SetupCard({
   onClear?: () => void;
 }) {
   return (
-    <section className="flex min-h-64 flex-col rounded-xl border border-border bg-panel p-5">
+    <section className="panel-card flex min-h-64 flex-col rounded-xl p-5">
       <div className="flex items-center justify-between">
         <div className={`grid h-8 w-8 place-items-center rounded-md text-sm font-bold ${done ? "bg-success text-black" : "bg-surface text-text-muted"}`}>
           {done ? "✓" : index}

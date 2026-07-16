@@ -52,46 +52,60 @@ export function SettingsPage({
       title="设置"
       description="配置游戏目录、ME3 目录和可选启动程序。路径校验由 Rust 后端执行。"
     >
-      <section className="max-w-4xl rounded-xl border border-border bg-panel p-5">
-        <div className="space-y-4">
-          <PathField
-            label="游戏安装目录"
-            hint="必须包含 nightreign.exe"
-            value={draftGamePath}
-            placeholder="选择包含 nightreign.exe 的 Game 文件夹"
-            onChange={setDraftGamePath}
-            onBrowse={selectGamePath}
-          />
-          <PathField
-            label="ME3 目录"
-            hint="包含 me3.exe 或 bin/me3.exe"
-            value={draftMe3Path}
-            placeholder="选择 ME3 根目录或 bin 目录"
-            onChange={setDraftMe3Path}
-            onBrowse={selectMe3Path}
-          />
-          <PathField
-            label="启动程序"
-            hint="可选。留空时使用 nightreign.exe"
-            value={draftLaunchExePath}
-            placeholder="留空：nightreign.exe"
-            onChange={setDraftLaunchExePath}
-            onBrowse={selectLaunchExePath}
-            onClear={() => setDraftLaunchExePath("")}
-          />
-        </div>
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
+        <section className="panel-card rounded-xl p-5">
+          <div className="section-label text-text-muted">Local paths</div>
+          <h2 className="mt-1 text-lg font-semibold text-text-primary">本机路径</h2>
+          <div className="mt-5 divide-y divide-border">
+            <PathField
+              label="游戏安装目录"
+              hint="必须包含 nightreign.exe"
+              value={draftGamePath}
+              placeholder="选择包含 nightreign.exe 的 Game 文件夹"
+              onChange={setDraftGamePath}
+              onBrowse={selectGamePath}
+            />
+            <PathField
+              label="ME3 目录"
+              hint="包含 me3.exe 或 bin/me3.exe"
+              value={draftMe3Path}
+              placeholder="选择 ME3 根目录或 bin 目录"
+              onChange={setDraftMe3Path}
+              onBrowse={selectMe3Path}
+            />
+            <PathField
+              label="启动程序"
+              hint="可选，留空时使用 nightreign.exe"
+              value={draftLaunchExePath}
+              placeholder="留空：nightreign.exe"
+              onChange={setDraftLaunchExePath}
+              onBrowse={selectLaunchExePath}
+              onClear={() => setDraftLaunchExePath("")}
+            />
+          </div>
 
-        <div className="mt-6 flex justify-end">
-          <button
-            type="button"
-            disabled={busy || !draftGamePath || !draftMe3Path}
-            onClick={() => void onSave(draftGamePath, draftMe3Path, draftLaunchExePath)}
-            className="rounded-lg bg-accent px-5 py-2.5 text-sm font-bold text-black transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            保存设置
-          </button>
-        </div>
-      </section>
+          <div className="mt-5 flex justify-end border-t border-border pt-4">
+            <button
+              type="button"
+              disabled={busy || !draftGamePath || !draftMe3Path}
+              onClick={() => void onSave(draftGamePath, draftMe3Path, draftLaunchExePath)}
+              className="rounded-lg bg-accent px-5 py-2.5 text-sm font-bold text-black transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              保存设置
+            </button>
+          </div>
+        </section>
+
+        <aside className="panel-card h-fit rounded-xl p-4">
+          <div className="section-label text-text-muted">Path rules</div>
+          <h3 className="mt-1 text-sm font-semibold text-text-primary">选择提示</h3>
+          <ol className="mt-4 space-y-4 text-xs leading-5 text-text-muted">
+            <li className="flex gap-3"><RuleNumber value="01" /><span>游戏目录选择包含 <b className="text-text-secondary">nightreign.exe</b> 的 Game 文件夹。</span></li>
+            <li className="flex gap-3"><RuleNumber value="02" /><span>ME3 可选择根目录，也可以直接选择 <b className="text-text-secondary">bin</b>。</span></li>
+            <li className="flex gap-3"><RuleNumber value="03" /><span>联机启动器会自动转换为 ME3 可用的游戏目标。</span></li>
+          </ol>
+        </aside>
+      </div>
     </PageFrame>
   );
 }
@@ -114,7 +128,7 @@ function PathField({
   onClear?: () => void;
 }) {
   return (
-    <div>
+    <div className="py-4 first:pt-0 last:pb-0">
       <div className="mb-2 flex items-end justify-between gap-3">
         <label className="text-sm font-semibold text-text-primary">{label}</label>
         <span className="text-xs text-text-muted">{hint}</span>
@@ -145,4 +159,8 @@ function PathField({
       </div>
     </div>
   );
+}
+
+function RuleNumber({ value }: { value: string }) {
+  return <span className="display-number shrink-0 text-[10px] font-semibold text-accent">{value}</span>;
 }

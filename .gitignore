@@ -6,6 +6,7 @@ node_modules/
 # Build
 dist/
 app/src-tauri/target/
+.build-tmp/
 
 # IDE
 .vscode/
@@ -28,7 +29,6 @@ npm-debug.log*
 
 # Tauri
 app/src-tauri/gen/
-app/src-tauri/icons/
 
 # Mod files
 mods/
@@ -40,6 +40,5 @@ me3/
 reference/
 
 # Rust
-app/src-tauri/Cargo.lock
 
 .agents/

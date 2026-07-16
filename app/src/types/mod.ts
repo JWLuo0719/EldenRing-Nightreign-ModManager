@@ -85,6 +85,20 @@ export interface SpecialModStatus {
   missingGameFiles: string[];
 }
 
+export type PreflightStatus = "pass" | "warning" | "error";
+
+export interface LaunchPreflightCheck {
+  id: string;
+  label: string;
+  status: PreflightStatus;
+  message: string;
+}
+
+export interface LaunchPreflight {
+  ready: boolean;
+  checks: LaunchPreflightCheck[];
+}
+
 export interface Me3Profile {
   profileVersion: string;
   supports: Me3Support[];

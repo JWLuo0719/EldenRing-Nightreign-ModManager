@@ -9,12 +9,14 @@ export function Titlebar({ onSettingsClick }: TitlebarProps) {
   const appWindow = useMemo(() => getCurrentWindow(), []);
 
   return (
-    <div className="flex h-10 shrink-0 select-none items-center border-b border-border bg-panel">
+    <div className="flex h-10 shrink-0 select-none items-center border-b border-border bg-panel/95">
       <div className="flex h-full flex-1 items-center gap-3 px-4" data-tauri-drag-region>
-        <div className="grid h-6 w-6 place-items-center rounded-md bg-accent text-xs font-black text-black">
+        <div className="grid h-6 w-6 place-items-center rounded-md border border-accent/50 bg-accent-soft text-[11px] font-black text-accent">
           N
         </div>
-        <span className="text-sm font-semibold text-text-primary">Nightreign Mod Manager</span>
+        <span className="text-xs font-semibold tracking-wide text-text-secondary">NIGHTREIGN</span>
+        <span className="h-3 w-px bg-border" />
+        <span className="text-[11px] text-text-muted">MOD CONTROL DESK</span>
       </div>
 
       <div className="flex h-full">

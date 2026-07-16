@@ -22,7 +22,7 @@ function App() {
       <div className={shellClass}>
         <Titlebar />
         <div className="grid flex-1 place-items-center">
-          <div className="rounded-xl border border-border bg-panel px-8 py-6 shadow-2xl">
+          <div className="panel-card rounded-xl px-8 py-6 shadow-2xl">
             <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
             <div className="mt-4 text-sm text-text-muted">正在读取工作区...</div>
           </div>
@@ -67,6 +67,7 @@ function App() {
             specialModStatus={manager.specialModStatus}
             busy={manager.busy}
             onLaunch={manager.launchGame}
+            onPreflight={manager.runLaunchPreflight}
             onRefresh={manager.refresh}
             onOpenDiagnostics={() => setCurrentPage("diagnostics")}
             onPrepareOnline={manager.installSeamlessOnlinefix}

@@ -3,6 +3,9 @@ $Host.UI.RawUI.WindowTitle = "Nightreign Mod Manager"
 
 $ProjectRoot = $PSScriptRoot
 $AppDir = Join-Path $ProjectRoot "app"
+# Keep compiler scratch files outside src-tauri so Tauri's development watcher
+# does not react to temporary linker writes as source changes.
+$ProjectTempDir = Join-Path $ProjectRoot ".build-tmp"
 
 function Test-Project {
     if (-not (Test-Path (Join-Path $AppDir "package.json"))) {
@@ -41,6 +44,9 @@ function Pause-Menu {
 }
 
 Test-Project
+New-Item -ItemType Directory -Force -Path $ProjectTempDir | Out-Null
+$env:TEMP = $ProjectTempDir
+$env:TMP = $ProjectTempDir
 
 while ($true) {
     Clear-Host

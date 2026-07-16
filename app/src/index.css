@@ -1,19 +1,21 @@
 @import "tailwindcss";
 
 @theme {
-  --color-app: #0d0f12;
-  --color-panel: #171a1f;
-  --color-surface: #21262d;
-  --color-text-primary: #f2efe7;
-  --color-text-secondary: #c2baad;
-  --color-text-muted: #7c756d;
-  --color-accent: #d6b25e;
-  --color-accent-hover: #e4c777;
-  --color-accent-soft: rgba(214, 178, 94, 0.14);
-  --color-border: #303640;
-  --color-success: #68d391;
-  --color-warning: #f6ad55;
-  --color-danger: #e56b5d;
+  --color-app: #090c0e;
+  --color-panel: #11161a;
+  --color-surface: #181f24;
+  --color-elevated: #20282e;
+  --color-text-primary: #f0ede5;
+  --color-text-secondary: #b9b3aa;
+  --color-text-muted: #777c7c;
+  --color-accent: #d4aa55;
+  --color-accent-hover: #e3bf72;
+  --color-accent-soft: rgba(212, 170, 85, 0.12);
+  --color-border: #293238;
+  --color-border-strong: #3a464d;
+  --color-success: #6fc293;
+  --color-warning: #e6a35a;
+  --color-danger: #dd7165;
 }
 
 * {
@@ -30,7 +32,9 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-app);
+  background:
+    radial-gradient(circle at 76% -20%, rgba(212, 170, 85, 0.08), transparent 34rem),
+    var(--color-app);
   color: var(--color-text-primary);
   font-family:
     "Microsoft YaHei UI",
@@ -42,6 +46,24 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+#root {
+  isolation: isolate;
+}
+
+#root::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  opacity: 0.22;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 80%);
+}
+
 button,
 input,
 textarea {
@@ -50,6 +72,13 @@ textarea {
 
 button {
   cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(212, 170, 85, 0.8);
+  outline-offset: 2px;
 }
 
 button:disabled {
@@ -76,4 +105,41 @@ button:disabled {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #4a5361;
+}
+
+.panel-card {
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-panel) 94%, transparent);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.13);
+}
+
+.section-label {
+  color: var(--color-accent);
+  font-family: Bahnschrift, "Microsoft YaHei UI", sans-serif;
+  font-size: 0.67rem;
+  font-weight: 650;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.display-number {
+  font-family: Bahnschrift, "Microsoft YaHei UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page-enter {
+    animation: page-enter 220ms ease-out both;
+  }
+
+  @keyframes page-enter {
+    from {
+      opacity: 0;
+      transform: translateY(5px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
 }

@@ -31,6 +31,13 @@ cd /d "%APP_DIR%" || (
   exit /b 1
 )
 
+rem Keep compiler scratch files outside src-tauri so the dev watcher cannot
+rem mistake linker/temp activity for a Rust source change and restart Tauri.
+set "PROJECT_TEMP=%ROOT_DIR%.build-tmp"
+if not exist "%PROJECT_TEMP%" mkdir "%PROJECT_TEMP%"
+set "TEMP=%PROJECT_TEMP%"
+set "TMP=%PROJECT_TEMP%"
+
 echo Starting Nightreign Mod Manager with Tauri dev...
 echo Tauri will start the Vite dev server through beforeDevCommand.
 echo.

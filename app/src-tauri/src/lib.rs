@@ -7,9 +7,6 @@ use commands::profile;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_log::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             mod_manager::get_game_path,
             mod_manager::set_game_path,
@@ -33,6 +30,7 @@ pub fn run() {
             mod_manager::diagnose_launch_game,
             mod_manager::generate_me3_profile,
             mod_manager::get_launch_artifacts,
+            mod_manager::get_launch_preflight,
             mod_manager::detect_file_conflicts,
             mod_manager::get_special_mod_status,
             mod_manager::install_seamless_onlinefix,

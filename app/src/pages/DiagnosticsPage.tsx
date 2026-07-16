@@ -31,6 +31,7 @@ export function DiagnosticsPage({
   const [logContent, setLogContent] = useState("");
   const [conflicts, setConflicts] = useState<FileConflict[]>([]);
   const [hasAnalyzedConflicts, setHasAnalyzedConflicts] = useState(false);
+  const visibleConflicts = conflicts.slice(0, 500);
 
   const runDiagnose = async () => {
     const result = await onDiagnose();
@@ -94,21 +95,21 @@ export function DiagnosticsPage({
       title="冲突与诊断"
       description="集中查看启动文件、诊断输出和文件级冲突。"
     >
-      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[22rem_1fr]">
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1">
-          <section className="rounded-xl border border-border bg-panel p-4">
+          <section className="panel-card rounded-xl p-4">
             <h2 className="text-base font-semibold text-text-primary">启动诊断</h2>
             <p className="mt-2 text-xs leading-5 text-text-muted">
-              这些操作只读取或生成诊断信息，不会修改 Mod 文件。
+              Profile 和日志操作不会修改 Mod 文件；启动诊断会真实启动 ME3 和游戏，用于确认注入结果。
             </p>
             <div className="mt-4 grid gap-2">
               <ActionButton disabled={busy} label="生成 ME3 Profile" onClick={refreshProfile} />
               <ActionButton disabled={busy} label="读取脚本和日志" onClick={refreshArtifacts} />
-              <ActionButton disabled={busy} label="执行启动诊断" onClick={runDiagnose} />
+              <ActionButton disabled={busy} label="启动游戏并诊断" onClick={runDiagnose} />
             </div>
           </section>
 
-          <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-border bg-panel">
+          <section className="panel-card flex min-h-0 flex-1 flex-col rounded-xl">
             <div className="flex shrink-0 items-center justify-between border-b border-border p-4">
               <div>
                 <h2 className="text-base font-semibold text-text-primary">文件级冲突</h2>
@@ -134,7 +135,12 @@ export function DiagnosticsPage({
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {conflicts.map((conflict) => (
+                  {conflicts.length > visibleConflicts.length && (
+                    <p className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs leading-5 text-warning">
+                      冲突较多，为控制界面内存仅显示前 {visibleConflicts.length} 条，共 {conflicts.length} 条。
+                    </p>
+                  )}
+                  {visibleConflicts.map((conflict) => (
                     <div key={conflict.relativePath} className="rounded-lg border border-warning/30 bg-warning/10 p-3">
                       <div className="break-all text-xs font-semibold text-warning">{conflict.relativePath}</div>
                       <div className="mt-2 space-y-1">
@@ -156,7 +162,7 @@ export function DiagnosticsPage({
           </section>
         </aside>
 
-        <section className="flex min-h-0 flex-col rounded-xl border border-border bg-panel">
+        <section className="panel-card flex min-h-0 flex-col rounded-xl">
           <div className="shrink-0 border-b border-border p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex rounded-lg border border-border bg-surface p-1">

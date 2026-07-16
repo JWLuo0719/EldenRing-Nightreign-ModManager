@@ -5,6 +5,7 @@ import type {
   ConfirmState,
   FileConflict,
   LaunchArtifacts,
+  LaunchPreflight,
   ModInfo,
   Profile,
   ProfileMod,
@@ -315,7 +316,11 @@ export function useModManager() {
         for (const mod of mods) {
           const desiredEnabled = desiredState.get(mod.id);
           if (desiredEnabled !== undefined && desiredEnabled !== mod.enabled) {
-            await invoke("toggle_mod", { modPath: mod.path, enabled: desiredEnabled });
+            if (isExternalMod(mod)) {
+              await invoke("toggle_external_mod", { modId: mod.id, enabled: desiredEnabled });
+            } else {
+              await invoke("toggle_mod", { modPath: mod.path, enabled: desiredEnabled });
+            }
           }
         }
 
@@ -383,13 +388,24 @@ export function useModManager() {
     }, "启动游戏失败");
   }, [pushToast, runTask]);
 
+  const runLaunchPreflight = useCallback(async () => {
+    return runTask(async () => {
+      const result = await invoke<LaunchPreflight>("get_launch_preflight");
+      pushToast(
+        result.ready ? "success" : "error",
+        result.ready ? "启动前检查通过" : "启动前检查发现阻止启动的问题"
+      );
+      return result;
+    }, "启动前检查失败");
+  }, [pushToast, runTask]);
+
   const diagnoseLaunch = useCallback(async () => {
     return runTask(async () => {
       const result = await invoke<string>("diagnose_launch_game", {
         gamePath: "",
         me3Path: "",
       });
-      pushToast("info", "诊断命令已执行");
+      pushToast("success", "ME3/游戏已由诊断启动，请勿再次点击普通启动");
       return result;
     }, "诊断启动失败");
   }, [pushToast, runTask]);
@@ -460,6 +476,7 @@ export function useModManager() {
     deleteProfile,
     updateProfile,
     launchGame,
+    runLaunchPreflight,
     diagnoseLaunch,
     generateProfilePreview,
     getLaunchArtifacts,

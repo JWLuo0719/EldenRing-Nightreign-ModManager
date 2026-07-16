@@ -108,9 +108,9 @@ export function ModsPage({
       title="Mod 仓库"
       description="扫描 Game\\mods，注册外部 Mod/DLL，并编辑可识别的 JSON/INI 配置。"
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <section className="shrink-0 rounded-xl border border-border bg-panel p-4">
-          <div className="grid gap-3 xl:grid-cols-[1fr_auto]">
+      <div className="flex min-h-0 flex-1 flex-col gap-4">
+        <section className="panel-card shrink-0 rounded-xl p-4">
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <div className="relative min-w-64 flex-1">
                 <SearchIcon />
@@ -138,7 +138,7 @@ export function ModsPage({
                 ))}
               </div>
             </div>
-            <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 disabled={busy}
@@ -174,7 +174,7 @@ export function ModsPage({
             </div>
           </div>
 
-          <div className="mt-3 grid gap-2 md:grid-cols-4">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <CompactStat label="全部" value={String(mods.length)} />
             <CompactStat label="启用" value={String(mods.filter((mod) => mod.enabled).length)} />
             <CompactStat label="资源包" value={String(mods.filter((mod) => mod.type === "package").length)} />
@@ -189,7 +189,7 @@ export function ModsPage({
           )}
         </section>
 
-        <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-border bg-panel">
+        <section className="panel-card flex min-h-0 flex-1 flex-col rounded-xl">
           <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2.5">
             <div className="text-sm font-semibold text-text-primary">Mod 配置卡片</div>
             <div className="text-xs text-text-muted">显示 {filteredMods.length} / {mods.length}</div>
@@ -203,7 +203,7 @@ export function ModsPage({
                 </div>
               </div>
             ) : (
-              <div className="grid gap-3 2xl:grid-cols-2">
+              <div className="grid gap-3 lg:grid-cols-2">
                 {filteredMods.map((mod) => (
                   <ModCard
                     key={mod.id}
@@ -268,9 +268,9 @@ function getPotentialConflicts(mods: ModInfo[]) {
 
 function CompactStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between rounded-lg border border-border bg-surface px-3 py-2">
+    <div className="flex items-center justify-between rounded-lg border border-border bg-surface/75 px-3 py-2">
       <span className="text-xs text-text-muted">{label}</span>
-      <span className="text-sm font-semibold text-text-primary">{value}</span>
+      <span className="display-number text-sm font-semibold text-text-primary">{value}</span>
     </div>
   );
 }
@@ -292,7 +292,7 @@ function ConfigEditor({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 px-6">
-      <section className="flex h-[78vh] w-full max-w-4xl flex-col rounded-xl border border-border bg-panel shadow-2xl">
+      <section className="panel-card flex h-[78vh] w-full max-w-4xl flex-col rounded-xl shadow-2xl">
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-text-primary">编辑 DLL 配置</div>

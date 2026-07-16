@@ -6,7 +6,7 @@ export function ToastHost({ toasts }: { toasts: Toast[] }) {
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`pointer-events-auto rounded-lg border px-4 py-3 text-sm shadow-2xl ${
+          className={`pointer-events-auto rounded-lg border px-4 py-3 text-sm shadow-2xl backdrop-blur-sm ${
             toast.type === "success"
               ? "border-success/35 bg-success/15 text-success"
               : toast.type === "error"
@@ -32,7 +32,7 @@ export function ConfirmDialog({
 }) {
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6 shadow-2xl">
+      <div className="panel-card w-full max-w-md rounded-xl p-6 shadow-2xl">
         <div className="text-lg font-semibold text-text-primary">{state.title}</div>
         <p className="mt-3 max-h-[50vh] overflow-auto whitespace-pre-wrap text-sm leading-6 text-text-secondary">
           {state.message}

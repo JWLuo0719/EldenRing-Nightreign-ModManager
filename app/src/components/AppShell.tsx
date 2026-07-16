@@ -57,26 +57,24 @@ export function AppShell({
   children,
 }: AppShellProps) {
   return (
-    <div className="flex min-h-0 flex-1 bg-app text-text-primary">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-panel">
-        <div className="px-5 py-5">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-text-muted">
-            Workspace
-          </div>
-          <div className="mt-3 rounded-lg border border-border bg-surface px-4 py-3">
-            <div className="truncate text-sm font-semibold text-text-primary">
-              {activeProfileName}
-            </div>
-            <div className="mt-2 flex items-center gap-2 text-xs text-text-muted">
-              <span className="h-2 w-2 rounded-full bg-success" />
-              <span>
-                {enabledCount}/{totalMods} 个 Mod 启用
-              </span>
+    <div className="flex min-h-0 flex-1 text-text-primary">
+      <aside className="flex w-[13.5rem] shrink-0 flex-col border-r border-border bg-panel/95">
+        <div className="border-b border-border px-4 py-4">
+          <div className="section-label text-text-muted">Active loadout</div>
+          <div className="mt-2 flex items-center gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-accent/25 bg-accent-soft text-sm font-bold text-accent">
+              {activeProfileName.slice(0, 1).toUpperCase()}
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-text-primary">{activeProfileName}</div>
+              <div className="mt-0.5 text-xs text-text-muted">
+                <span className="display-number text-success">{enabledCount}</span> / {totalMods} 已启用
+              </div>
             </div>
           </div>
         </div>
 
-        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3">
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2.5 py-3" aria-label="主导航">
           {navItems.map((item) => {
             const active = currentPage === item.key;
             return (
@@ -84,22 +82,26 @@ export function AppShell({
                 key={item.key}
                 type="button"
                 onClick={() => onPageChange(item.key)}
-                className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors ${
+                aria-current={active ? "page" : undefined}
+                className={`group relative flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all ${
                   active
-                    ? "bg-accent text-black"
-                    : "text-text-secondary hover:bg-surface hover:text-text-primary"
+                    ? "border-accent/25 bg-accent-soft text-text-primary"
+                    : "border-transparent text-text-secondary hover:border-border hover:bg-surface hover:text-text-primary"
                 }`}
               >
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-black/10">
+                {active && <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-accent" />}
+                <span
+                  className={`grid h-8 w-8 shrink-0 place-items-center rounded-md border transition-colors ${
+                    active
+                      ? "border-accent/25 bg-accent/10 text-accent"
+                      : "border-border/70 bg-surface text-text-muted group-hover:text-text-secondary"
+                  }`}
+                >
                   {item.icon}
                 </span>
                 <span className="min-w-0">
                   <span className="block text-sm font-semibold">{item.label}</span>
-                  <span
-                    className={`mt-0.5 block truncate text-xs ${
-                      active ? "text-black/65" : "text-text-muted"
-                    }`}
-                  >
+                  <span className="mt-0.5 block truncate text-[11px] text-text-muted">
                     {item.description}
                   </span>
                 </span>
@@ -108,12 +110,15 @@ export function AppShell({
           })}
         </nav>
 
-        <div className="border-t border-border px-5 py-4 text-xs leading-5 text-text-muted">
-          ME3 链路已按 SeamlessCoop/Spacewar 环境配置。启动失败时优先使用诊断页。
+        <div className="m-3 rounded-lg border border-border bg-app/40 p-3 text-[11px] leading-5 text-text-muted">
+          <div className="mb-1.5 flex items-center gap-2 font-semibold text-text-secondary">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" /> ME3 工作区
+          </div>
+          启动异常时先运行启动前检查，再进入诊断页。
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
+      <main className="min-w-0 flex-1 overflow-hidden bg-app/50">{children}</main>
     </div>
   );
 }
