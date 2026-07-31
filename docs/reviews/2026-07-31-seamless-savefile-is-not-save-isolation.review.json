@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 2,
+  "id": "elden-ring-nightreign-mod-manager-20260731-seamless-savefile-is-not-save-isolation",
+  "projectId": "elden-ring-nightreign-mod-manager",
+  "project": "Elden Ring Nightreign Mod Manager",
+  "date": "2026-07-31",
+  "type": "troubleshooting",
+  "title": "Spacewar + Seamless 不能依赖 ME3 savefile 隔离玩法存档",
+  "summary": "人物不显示最终由干净角色 A/B 定位到旧 NR0000.co2 的装备/玩法状态，而不是 MMV、中文层或 Seamless 注入失败；同时实测发现 ME3 Profile 的自定义 savefile 在当前 Spacewar + Seamless 链路中被实际运行时忽略，管理器必须按 nrsc_settings.ini 指向的真实存档做备份和玩法指纹保护。",
+  "problem": "完整 MMV + Weapons + 602 + Seamless 已由 ME3 成功加载，但原角色仍不显示。为了隔离测试，临时 Profile 改用自定义 savefile；如果继续相信该字段，既会误判 Mod 根因，也可能备份错误文件并覆盖真实 Seamless 进度。",
+  "symptoms": [
+    "原 NR0000.co2 在只加载 Seamless + 602 时仍出现人物异常。",
+    "同一原存档在完整 MMV + Weapons + 602 + Seamless 下同样异常。",
+    "新建角色在仅 Seamless 时人物模型和默认武器正常。",
+    "同一新角色加载完整整合后人物、护甲和武器仍正常，MMV 标识和简中界面同时生效。",
+    "ME3 日志显示接受 NR0000.codex-ab-clean，但文件系统只写入 NR0000.co2，没有出现独立存档。"
+  ],
+  "rootCause": "旧 NR0000.co2 保留了另一套 regulation.bin 下的武器、装备或进度标识，切换玩法参数后产生不可显示状态。Spacewar + Seamless 的实际存档选择由 nrsc_settings.ini 的 save_file_extension 控制，ME3 Profile 的 savefile 在该链路中不是可靠隔离层。",
+  "solution": [
+    "用最小矩阵把变量拆成旧/新存档与无玩法 Mod/完整整合，先证明资源加载和角色状态哪个随变量变化。",
+    "Seamless 环境中忽略 Profile 对备份目标的覆盖，始终从 nrsc_settings.ini 推断 NR0000.<extension>。",
+    "存档复制后重新计算源和目标 SHA-256，不一致即删除不可信副本并阻止启动。",
+    "记录上次管理器实际启动的 regulation.bin SHA-256；再次启动若指纹变化或已有存档来源未知，明确警告人物/武器不显示风险。",
+    "不自动删除异常旧存档；保留可验证备份，让用户在新角色迁移与恢复匹配旧 regulation 之间选择。",
+    "沿用 Cyberpunk 管理器的哈希绑定事务经验，但将文件所有权清单转换为 Nightreign 的二进制存档、regulation 指纹和只读恢复证据。"
+  ],
+  "verification": [
+    "三组真实游戏 A/B 显示：异常只跟随原 NR0000.co2；新角色在无玩法包与完整整合下均正常。",
+    "完整整合测试中 MMV 页脚和 602 简中界面同时出现，证明 package 与中文覆盖层加载。",
+    "原 NR0000.co2 与 .bak 从管理器备份恢复后 SHA-256 均为 74E36DCC7F4A0A9065043F5DBD972C6659479A5F88B918E26C81551150685B8D。",
+    "cargo test save_ 通过两个新增测试：Seamless 备份目标忽略自定义 Profile 文件名；regulation 指纹变化产生人物/武器风险警告。",
+    "602 真实 ZIP SHA-256 为 3166254E167551F8F8B85B2897070371D6D58C57407687F4607CC91493946B58，已由真实管理器安装路径参与完整整合测试。"
+  ],
+  "mistakes": [
+    "最初把人物不显示与 MMV/Redirector 注入混在一起，没有优先用同一存档停用 MMV 做对照。",
+    "把 ME3 日志接受 savefile 字段误当成运行时一定创建独立存档，缺少文件系统落盘验证。",
+    "存档备份此前只检查 fs::copy 成功，没有对源和副本做哈希回读。",
+    "真实 A/B 在发现自定义存档未隔离后才确认实际 NR0000.co2 被改写；幸好启动前备份存在并可按哈希恢复。",
+    "资源已加载、中文已显示不能证明旧角色数据与当前 regulation 兼容。"
+  ],
+  "tags": [
+    "Nightreign",
+    "Spacewar",
+    "SeamlessCoop",
+    "ME3",
+    "savefile",
+    "regulation.bin",
+    "存档备份",
+    "A/B 测试",
+    "Mod 管理器",
+    "回滚"
+  ],
+  "reusability": "high",
+  "articleScore": 94,
+  "privacy": "redact",
+  "status": "inbox",
+  "reuseCount": 0,
+  "appliedIn": [],
+  "supersedes": [],
+  "contradicts": [],
+  "articleAngle": "日志说用了新存档，游戏却覆盖了旧存档：一次 Mod 人物消失排障如何暴露伪隔离",
+  "source": {
+    "threadId": "019fb41c-49bf-7062-b8b2-a87b14b3e789",
+    "commit": "",
+    "files": [
+      "AGENTS.md",
+      "docs/CURRENT_STATUS.md",
+      "docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md",
+      "app/src-tauri/src/commands/mod_manager.rs",
+      "D:\\Project\\Game-create\\Cyberpunk2077-ModManager\\docs\\reviews\\2026-07-10-hash-bound-transaction-safety.review.json"
+    ]
+  }
+}

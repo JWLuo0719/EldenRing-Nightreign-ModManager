@@ -119,6 +119,7 @@ D:\Project\Game-create\Nmodm
 {dirs::config_dir()}/nightreign-mod-manager/active-nightreign.me3
 {dirs::config_dir()}/nightreign-mod-manager/launch/launch-nightreign.bat
 {dirs::config_dir()}/nightreign-mod-manager/launch/last-launch.log
+{dirs::config_dir()}/nightreign-mod-manager/launch/last-gameplay-profile.json
 ```
 
 当前开发机通常展开为：
@@ -169,6 +170,8 @@ cd /d "{me3_path}\bin"
 - `--skip-steam-init --online --game nightreign` 是 SeamlessCoop/Spacewar 环境中已验证成功的组合。
 - MMV Server Redirector 必须改用 `--online --game nightreign`，不得追加 `--skip-steam-init`，否则会跳过 Redirector 所依赖的正版 Steam 身份初始化。
 - 普通正版 Mod 方案默认使用 `NR0000.nmm`，避免写入官方 `NR0000.sl2`。Seamless 存档名从 `nrsc_settings.ini` 的 `save_file_extension` 推断，默认 `NR0000.co2`。每次实际启动和诊断启动前都应备份当前有效存档及 `.bak`。
+- Spacewar + Seamless 实测证明，ME3 Profile 中自定义 `savefile` 不能可靠隔离 Seamless 存档：即使 ME3 日志接受其他文件名，游戏仍会写入 `nrsc_settings.ini` 决定的 `NR0000.co2`。管理器必须按真实 Seamless 文件备份，不得把作者 Profile 的 `savefile` 描述为隔离保证。
+- 切换或移除玩法 `regulation.bin` 后，旧存档可能保留已变化的武器/装备 ID，表现为人物或武器不显示。当前完整 MMV + Weapons + 602 + Seamless 方案已用新角色验证显示正常，而同一方案下原 `NR0000.co2` 仍异常，因此启动前应比较上次玩法指纹、警告存档兼容风险并做哈希回读备份；不能用“资源已成功加载”推断旧存档兼容。
 - 不要再使用 `cmd /C start "Nightreign-ME3" ...` 这类写法。Windows 对 `start` 的 title 参数解析容易导致类似找不到 `VNightreign-ME3\` 或 `WNightreign-ME3\` 的错误。
 - 当前稳定写法是生成 bat，然后 `cmd /K <bat>`，并通过 Windows `CREATE_NEW_CONSOLE` 打开独立控制台。
 - 从 `dev.bat` 启动 Tauri 后，ME3 输出不一定会出现在原终端。启动诊断应优先看 `launch\last-launch.log` 和独立控制台。

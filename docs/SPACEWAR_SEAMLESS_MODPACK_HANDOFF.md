@@ -48,6 +48,26 @@ Game\SeamlessCoop\nrsc_settings.ini
 用户只能提供 `Spacewar + Seamless` 真实启动环境。纯正版 Steam、正版 Steam +
 Seamless 和 MMV Server Redirector 不能宣称已经由用户实测。
 
+## 2026-07-31 真实游戏 A/B 结论
+
+已用同一台机器完成三组可恢复测试：
+
+1. 原 `NR0000.co2`，停用 MMV，只加载 Seamless + 602：人物仍异常；
+2. 新建角色，只加载 Seamless：完整人物模型与默认武器正常；
+3. 同一新角色，加载 MMV + Weapons + 602 + Seamless：人物、护甲和默认武器正常，
+   MMV 页脚与简中界面同时生效。
+
+这组对照排除了“MMV package 没加载”和“Spacewar + Seamless 必然导致人物消失”。
+当前异常只随原存档出现，最可信根因是旧存档保留了另一套 `regulation.bin` 下的
+武器/装备或进度状态。完整整合方案已经在新角色上跑通；原存档仍应保持原样，不能
+为了显示正常而自动删除。
+
+测试还揭示一项管理器安全边界：临时 Profile 声明
+`savefile = "NR0000.codex-ab-clean"` 后，ME3 日志虽然接受该字段，Spacewar +
+Seamless 实际仍写入 `NR0000.co2`，没有生成独立文件。因此后续不得把 Profile
+`savefile` 当作 Seamless 存档隔离。原存档已从启动前备份恢复，并通过源/目标
+SHA-256 一致性确认；管理器现始终按 `nrsc_settings.ini` 决定的真实文件备份。
+
 ## 2026-07-31 两张检查截图的结论
 
 ### 启用当前 MMV + Weapons 作者包
@@ -292,11 +312,19 @@ D:\Game\ELDEN RING NIGHTREIGN\mods\SkinOverhaul
 
 ## 当前恢复点
 
-截至 2026-07-31，本机下载目录和实际游戏 Mod 目录均没有 602 于
-2026-07-22 上传的 314 KB 主文件。Nexus 文件下载需要用户登录，自动浏览器访问
-文件页时站点关闭连接；不要从未经作者授权的镜像取得文件。用户登录 Nexus 下载后，
-只需提供 ZIP 绝对路径，即可从上面的最小化验证顺序第 6 步继续。管理器会在安装时
-规范 `msg\zhocn` 布局，并在启动前显示中文关键文件 SHA-256。
+截至 2026-07-31，602 于 2026-07-22 上传的 314 KB 主文件已通过登录后的 Nexus
+官方 Slow download 获取，并由真实管理器安装流程规范到 `msg\zhocn`。ZIP 的
+SHA-256 为
+`3166254E167551F8F8B85B2897070371D6D58C57407687F4607CC91493946B58`；
+安装后的 item/menu 哈希分别为
+`A1FF17385256E7AAD60F88F74D9292D4C11B75541EF6019BB4AB5085F52B8BC6` 和
+`F6EEA4A210CBC6E3314998FA9001C487CEAD87081530152011B7B3BC060201D7`。
+真实游戏已确认中文界面与 MMV 标识同时出现。
+
+当前可玩恢复点是“新角色 + MMV/Weapons 社区 Seamless 模式 + 602”；原
+`NR0000.co2` 已恢复但其人物状态仍异常。不要自动删除原进度。若用户选择迁移，
+应先保留管理器备份，再新建角色；若要保留旧角色，则需恢复与该存档匹配的旧
+regulation/装备状态后再尝试卸下旧 Mod 武器。
 
 本机虽有 `D:\MO\ModOrganizer\nxmhandler.exe` 并注册了 `nxm://`，但没有
 Nightreign 的 MO2 实例，也没有 Nexus API Key、Vortex 或 Nexus Mods App。
@@ -333,6 +361,8 @@ Nexus Cookie、账号、API Key 或在线下载权限。
 - Server Redirector/Seamless 冲突硬门禁；
 - 作者 `.me3` 语义保真解析；
 - 启动前存档备份；
+- Seamless 真实存档名优先于 Profile `savefile`，备份后 SHA-256 回读；
+- 上次 regulation 指纹记录与人物/装备兼容风险提示；
 - OnlineFix 补丁事务备份和恢复；
 - 文件级同名冲突分析。
 - 外部作者 Profile 的显式社区 Seamless 兼容开关；

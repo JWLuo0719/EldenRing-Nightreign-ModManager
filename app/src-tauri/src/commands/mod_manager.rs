@@ -237,6 +237,16 @@ struct PatchBackupFile {
     existed: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct GameplayLaunchRecord {
+    savefile: String,
+    regulation_sha256: Option<String>,
+    runtime_environment: String,
+    selected_mod_count: usize,
+    recorded_at: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 struct ExternalModsConfig {
     #[serde(default)]
@@ -297,6 +307,12 @@ fn get_launch_log_path() -> PathBuf {
     let launch_dir = get_config_dir().join("launch");
     fs::create_dir_all(&launch_dir).ok();
     launch_dir.join("last-launch.log")
+}
+
+fn get_gameplay_launch_record_path() -> PathBuf {
+    let launch_dir = get_config_dir().join("launch");
+    fs::create_dir_all(&launch_dir).ok();
+    launch_dir.join("last-gameplay-profile.json")
 }
 
 fn load_config() -> AppConfig {
@@ -1326,15 +1342,14 @@ fn effective_save_filename(
     environment: RuntimeEnvironment,
     game_dir: &Path,
 ) -> Result<String, String> {
-    let filename = if let Some(savefile) = plan.savefile.as_deref() {
-        savefile.trim().to_string()
-    } else if plan.network_backend == NetworkBackend::Seamless
+    let filename = if plan.network_backend == NetworkBackend::Seamless
         || matches!(
             environment,
             RuntimeEnvironment::SteamSeamless | RuntimeEnvironment::SpacewarSeamless
-        )
-    {
+        ) {
         seamless_save_filename(game_dir).unwrap_or_else(|| "NR0000.co2".to_string())
+    } else if let Some(savefile) = plan.savefile.as_deref() {
+        savefile.trim().to_string()
     } else {
         "NR0000.sl2".to_string()
     };
@@ -1433,10 +1448,122 @@ fn backup_effective_save(
                     target.to_string_lossy()
                 )
             })?;
+            let source_hash = sha256_file(&source)?;
+            let target_hash = sha256_file(&target)?;
+            if source_hash != target_hash {
+                let _ = fs::remove_file(&target);
+                return Err(format!(
+                    "存档备份回读校验失败，已阻止启动：{} -> {}",
+                    source.to_string_lossy(),
+                    target.to_string_lossy()
+                ));
+            }
             copied = true;
         }
     }
     Ok(copied.then_some(backup_dir))
+}
+
+fn load_gameplay_launch_record() -> Option<GameplayLaunchRecord> {
+    let content = fs::read_to_string(get_gameplay_launch_record_path()).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn regulation_sha256(plan: &GeneratedProfilePlan) -> Result<Option<String>, String> {
+    match plan.regulation_files.as_slice() {
+        [path] => sha256_file(path).map(Some),
+        _ => Ok(None),
+    }
+}
+
+fn save_gameplay_launch_record(
+    plan: &GeneratedProfilePlan,
+    environment: RuntimeEnvironment,
+    game_dir: &Path,
+) -> Result<(), String> {
+    let record = GameplayLaunchRecord {
+        savefile: effective_save_filename(plan, environment, game_dir)?,
+        regulation_sha256: regulation_sha256(plan)?,
+        runtime_environment: environment.as_str().to_string(),
+        selected_mod_count: plan.selected_mod_count,
+        recorded_at: current_timestamp().to_string(),
+    };
+    let content = serde_json::to_string_pretty(&record)
+        .map_err(|error| format!("序列化玩法启动记录失败：{error}"))?;
+    fs::write(get_gameplay_launch_record_path(), content)
+        .map_err(|error| format!("写入玩法启动记录失败：{error}"))
+}
+
+fn count_existing_saves(savefile: &str) -> usize {
+    let Some(app_data_dir) = dirs::config_dir() else {
+        return 0;
+    };
+    let saves_root = app_data_dir.join("Nightreign");
+    let Ok(account_dirs) = fs::read_dir(saves_root) else {
+        return 0;
+    };
+    account_dirs
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join(savefile).is_file())
+        .count()
+}
+
+fn assess_gameplay_save_compatibility(
+    savefile: &str,
+    existing_save_count: usize,
+    current_regulation_sha256: Option<&str>,
+    previous: Option<&GameplayLaunchRecord>,
+) -> (&'static str, String) {
+    if existing_save_count == 0 {
+        return (
+            "pass",
+            format!("没有找到现有 {savefile}；首次创建角色时会建立与当前玩法参数一致的新存档。"),
+        );
+    }
+
+    match (current_regulation_sha256, previous) {
+        (Some(current), Some(previous))
+            if previous.savefile.eq_ignore_ascii_case(savefile)
+                && previous.regulation_sha256.as_deref() == Some(current) =>
+        {
+            (
+                "pass",
+                format!(
+                    "找到 {existing_save_count} 份 {savefile}；当前 regulation.bin 与上次管理器启动记录一致（SHA-256={current}）。启动前仍会执行哈希回读备份。"
+                ),
+            )
+        }
+        (Some(current), Some(previous)) if previous.savefile.eq_ignore_ascii_case(savefile) => (
+            "warning",
+            format!(
+                "找到 {existing_save_count} 份 {savefile}，但当前 regulation.bin（SHA-256={current}）与上次管理器启动记录（{}）不同。旧存档可能保留已变化的武器/装备 ID，表现为人物或武器不显示。请改回匹配方案，或在保留备份后用新角色验证；Profile 的 savefile 不能隔离 Seamless 存档。",
+                previous.regulation_sha256.as_deref().unwrap_or("无 regulation.bin")
+            ),
+        ),
+        (Some(current), _) => (
+            "warning",
+            format!(
+                "找到 {existing_save_count} 份来源未知的 {savefile}；当前 regulation.bin SHA-256={current}。旧存档若来自另一套地图/武器参数，可能出现人物或装备不显示。启动前会哈希回读备份；建议先用新角色验证。"
+            ),
+        ),
+        (None, Some(previous))
+            if previous.savefile.eq_ignore_ascii_case(savefile)
+                && previous.regulation_sha256.is_some() =>
+        {
+            (
+                "warning",
+                format!(
+                    "找到 {existing_save_count} 份 {savefile}，但当前方案没有 regulation.bin，上次管理器启动记录包含玩法参数。移除地图/武器参数后继续旧存档可能导致人物或装备不显示。"
+                ),
+            )
+        }
+        (None, _) => (
+            "pass",
+            format!(
+                "找到 {existing_save_count} 份 {savefile}；当前方案没有自定义 regulation.bin。启动前会执行哈希回读备份。"
+            ),
+        ),
+    }
 }
 
 #[command]
@@ -1665,31 +1792,72 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
             );
 
             match effective_save_filename(plan, runtime_environment, game_dir) {
-                Ok(savefile) => add_preflight_check(
-                    &mut checks,
-                    "savefile",
-                    "存档隔离",
-                    if plan.network_backend == NetworkBackend::ServerRedirector
-                        && savefile.eq_ignore_ascii_case("NR0000.co2")
-                    {
-                        "warning"
-                    } else {
-                        "pass"
-                    },
-                    if plan.network_backend == NetworkBackend::ServerRedirector
-                        && savefile.eq_ignore_ascii_case("NR0000.co2")
-                    {
-                        "当前作者 Profile 使用 NR0000.co2，与 Seamless 默认存档同名；它不是独立存档。每次启动前会自动备份，但切换方案前仍应确认存档用途。".to_string()
-                    } else if runtime_environment == RuntimeEnvironment::SteamOfficial
-                        && savefile.eq_ignore_ascii_case(OFFICIAL_MOD_SAVEFILE)
-                    {
-                        format!(
-                            "普通正版 Mod 方案强制使用 {savefile}，避免写入官方 NR0000.sl2；启动前会备份已有文件。"
-                        )
-                    } else {
-                        format!("本次使用 {savefile}；如已存在，启动前会自动备份。")
-                    },
-                ),
+                Ok(savefile) => {
+                    let seamless_runtime = plan.network_backend == NetworkBackend::Seamless
+                        || matches!(
+                            runtime_environment,
+                            RuntimeEnvironment::SteamSeamless
+                                | RuntimeEnvironment::SpacewarSeamless
+                        );
+                    let ignored_profile_savefile = seamless_runtime
+                        && plan
+                            .savefile
+                            .as_deref()
+                            .is_some_and(|declared| !declared.eq_ignore_ascii_case(&savefile));
+                    add_preflight_check(
+                        &mut checks,
+                        "savefile",
+                        "存档隔离",
+                        if (plan.network_backend == NetworkBackend::ServerRedirector
+                            && savefile.eq_ignore_ascii_case("NR0000.co2"))
+                            || ignored_profile_savefile
+                        {
+                            "warning"
+                        } else {
+                            "pass"
+                        },
+                        if ignored_profile_savefile {
+                            format!(
+                                "作者 Profile 声明了 {}，但 Seamless 实际存档由 nrsc_settings.ini 决定；本次按真实文件 {savefile} 备份。不要把 Profile 的 savefile 当作 Spacewar/Seamless 存档隔离。",
+                                plan.savefile.as_deref().unwrap_or_default()
+                            )
+                        } else if plan.network_backend == NetworkBackend::ServerRedirector
+                            && savefile.eq_ignore_ascii_case("NR0000.co2")
+                        {
+                            "当前作者 Profile 使用 NR0000.co2，与 Seamless 默认存档同名；它不是独立存档。每次启动前会自动备份，但切换方案前仍应确认存档用途。".to_string()
+                        } else if seamless_runtime {
+                            format!(
+                                "Seamless 实际使用 {savefile}（由 nrsc_settings.ini 决定）；Profile 的 savefile 不提供额外隔离。启动前会执行哈希回读备份。"
+                            )
+                        } else if runtime_environment == RuntimeEnvironment::SteamOfficial
+                            && savefile.eq_ignore_ascii_case(OFFICIAL_MOD_SAVEFILE)
+                        {
+                            format!(
+                                "普通正版 Mod 方案强制使用 {savefile}，避免写入官方 NR0000.sl2；启动前会备份已有文件。"
+                            )
+                        } else {
+                            format!("本次使用 {savefile}；如已存在，启动前会自动备份。")
+                        },
+                    );
+
+                    if seamless_runtime {
+                        let current_regulation = regulation_sha256(plan).ok().flatten();
+                        let previous = load_gameplay_launch_record();
+                        let (status, message) = assess_gameplay_save_compatibility(
+                            &savefile,
+                            count_existing_saves(&savefile),
+                            current_regulation.as_deref(),
+                            previous.as_ref(),
+                        );
+                        add_preflight_check(
+                            &mut checks,
+                            "save_gameplay_compatibility",
+                            "存档与玩法参数",
+                            status,
+                            message,
+                        );
+                    }
+                }
                 Err(error) => {
                     add_preflight_check(&mut checks, "savefile", "存档隔离", "error", error)
                 }
@@ -2229,6 +2397,13 @@ pub fn launch_game(game_path: String, me3_path: String) -> Result<String, String
     ));
 
     launch_via_script(&launch_script)?;
+    if let Err(error) =
+        save_gameplay_launch_record(&plan, runtime_environment, Path::new(&game_path))
+    {
+        append_launch_log(&format!(
+            "玩法启动记录写入失败（不影响本次启动）：{error}\n"
+        ));
+    }
 
     Ok(format!(
         "启动脚本已执行。\n脚本：{}\n日志：{}{}",
@@ -2305,6 +2480,13 @@ pub fn diagnose_launch_game(game_path: String, me3_path: String) -> Result<Strin
         .stderr(Stdio::from(log_file))
         .spawn()
         .map_err(|e| format!("无法启动 ME3：{e}\n\n命令：{command_line}"))?;
+    if let Err(error) =
+        save_gameplay_launch_record(&plan, runtime_environment, Path::new(&game_path))
+    {
+        append_launch_log(&format!(
+            "玩法启动记录写入失败（不影响本次诊断）：{error}\n"
+        ));
+    }
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(4) {
@@ -4705,6 +4887,58 @@ path = "map/Server Redirector/cl_server_redirector.dll"
     }
 
     #[test]
+    fn seamless_backup_uses_nrsc_save_even_when_profile_declares_another_file() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_seamless_save_test_{}",
+            current_timestamp()
+        ));
+        let settings_dir = root.join("SeamlessCoop");
+        fs::create_dir_all(&settings_dir).unwrap();
+        fs::write(
+            settings_dir.join("nrsc_settings.ini"),
+            b"save_file_extension = co2",
+        )
+        .unwrap();
+        let plan = GeneratedProfilePlan {
+            content: String::new(),
+            network_backend: NetworkBackend::Seamless,
+            author_profile_sources: Vec::new(),
+            savefile: Some("NR0000.codex-test".to_string()),
+            start_online: Some(true),
+            selected_mod_count: 1,
+            package_count: 0,
+            native_count: 1,
+            mmv_seamless_community_count: 0,
+            regulation_files: Vec::new(),
+            zhocn_packages: Vec::new(),
+        };
+
+        let actual =
+            effective_save_filename(&plan, RuntimeEnvironment::SpacewarSeamless, &root).unwrap();
+
+        assert_eq!(actual, "NR0000.co2");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gameplay_save_affinity_warns_when_regulation_changes() {
+        let previous = GameplayLaunchRecord {
+            savefile: "NR0000.co2".to_string(),
+            regulation_sha256: Some("OLD".to_string()),
+            runtime_environment: "spacewar_seamless".to_string(),
+            selected_mod_count: 3,
+            recorded_at: "1".to_string(),
+        };
+
+        let (status, message) =
+            assess_gameplay_save_compatibility("NR0000.co2", 1, Some("NEW"), Some(&previous));
+
+        assert_eq!(status, "warning");
+        assert!(message.contains("人物或武器不显示"));
+        assert!(message.contains("Profile 的 savefile 不能隔离 Seamless 存档"));
+    }
+
+    #[test]
     fn patch_backup_restores_overwritten_and_removes_new_files() {
         let root = std::env::temp_dir().join(format!(
             "nightreign_mod_manager_patch_backup_test_{}",
@@ -5040,5 +5274,33 @@ path = "map/Server Redirector/cl_server_redirector.dll"
         assert!(parse_tasklist_processes(output)
             .iter()
             .any(|process| process.name.eq_ignore_ascii_case("steam.exe")));
+    }
+
+    #[test]
+    #[ignore = "requires NIGHTREIGN_ZHOCN_ZIP to point to a downloaded translation archive"]
+    fn installs_downloaded_zhocn_sample_into_configured_game() {
+        let archive = std::env::var("NIGHTREIGN_ZHOCN_ZIP")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_ZHOCN_ZIP");
+        assert_eq!(
+            sha256_file(&archive).unwrap(),
+            "3166254E167551F8F8B85B2897070371D6D58C57407687F4607CC91493946B58"
+        );
+
+        let installed = install_mod_from_zip_blocking(&archive.to_string_lossy()).unwrap();
+        let installed_path = PathBuf::from(&installed.path);
+
+        assert!(installed.zhocn_layout_normalized);
+        assert!(installed_path
+            .join("msg")
+            .join("zhocn")
+            .join("item_dlc01.msgbnd.dcx")
+            .is_file());
+        assert!(installed_path
+            .join("msg")
+            .join("zhocn")
+            .join("menu_dlc01.msgbnd.dcx")
+            .is_file());
+        eprintln!("installed zhocn sample at {}", installed.path);
     }
 }

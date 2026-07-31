@@ -154,6 +154,21 @@
   `docs/reviews/2026-07-31-cross-project-mod-manager-knowledge-transf-7c6a2e65.review.json`。
   后续非平凡任务应先检索 ReviewHub，再把命中的知识分成可复用规则、领域差异和
   本项目新增项。
+- 602 真实 ZIP 已通过管理器安装到当前 Game 的 `mods` 目录并完成游戏内 A/B。
+  关键结论不是 MMV 资源缺失：原 `NR0000.co2` 在“仅 Seamless + 602”和完整
+  “MMV + Weapons + 602 + Seamless”下都出现人物异常；新建角色在仅 Seamless
+  时人物/默认武器正常，在完整整合下也保持正常，同时 MMV 页脚与中文界面生效。
+  因此当前人物问题已定位为旧存档中的装备/玩法参数状态，而不是 package、中文层
+  或 Seamless 注入失败。
+- A/B 期间发现 ME3 Profile 的自定义 `savefile` 在 Spacewar + Seamless 下并未
+  隔离存档，实际仍写入 `NR0000.co2`。原存档已从管理器启动前备份恢复，当前
+  `NR0000.co2` 与 `.bak` 的 SHA-256 均为
+  `74E36DCC7F4A0A9065043F5DBD972C6659479A5F88B918E26C81551150685B8D`；
+  干净测试存档另存于 Git 忽略的 `.build-tmp`，没有覆盖提交内容。
+- 管理器现改为：Seamless 环境始终按 `nrsc_settings.ini` 推断真实存档名；存档复制
+  后执行 SHA-256 回读校验；记录上次管理器启动的 regulation 指纹；再次启动时若
+  玩法参数变化或旧存档来源未知，启动前检查会提示人物/武器不显示风险。该保护
+  不会自动删除或替换用户进度，是否迁移到新角色仍由用户决定。
 
 ## 2026-07-31 验证结果
 
@@ -171,9 +186,10 @@ cargo check
 cargo test
 ```
 
-Rust 单元测试结果：35 项（32 passed，3 ignored，0 failed）。三项 ignored
-分别用于真实下载 MMV 作者 Profile、真实 MMV 社区转换和当前工作区只读集成
-验证，需显式提供本机环境变量。本轮已显式运行前两项本地样本测试，均通过；
+Rust 单元测试结果：38 项（34 passed，4 ignored，0 failed）。四项 ignored
+分别用于真实下载 MMV 作者 Profile、真实 MMV 社区转换、当前工作区只读集成
+验证和 602 真实 ZIP 安装，需显式提供本机环境变量。本轮已显式运行前两项 MMV
+本地样本测试，均通过；602 真实 ZIP 此前已由同一安装函数完成实际安装与哈希验证；
 此前当前工作区检查同时确认自动识别为
 Spacewar + Seamless，并因 MMV Server Redirector 环境错配而阻止启动。
 `npx tauri build --debug --no-bundle` 已通过独立
