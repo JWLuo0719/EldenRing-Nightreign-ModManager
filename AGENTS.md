@@ -15,6 +15,9 @@
 - 当前用户的 SeamlessCoop/联机补丁文件已放在游戏根目录的 `SeamlessCoop\` 中，关键文件包括 `nrsc.dll`、`nighter.dll`、`nrsc_settings.ini`。
 - 当前用户保留的联机补丁源目录示例：`D:\Game\ERN\联机补丁\Game`。不要自动覆盖游戏目录文件，除非用户明确要求。
 - 正版 Steam 官方游玩与 SeamlessCoop/Spacewar 游玩不共用启动方式，也不共用存档。当前已验证成功的是第二种 SeamlessCoop/Spacewar 环境。
+- MMV Server Redirector 属于正版 Steam 路线：必须使用干净的 Steam 正版 `Game` 目录、运行中的 Steam 和 Forsaken Hollows DLC；不能与 OnlineFix/Spacewar 共用游戏目录。管理器应阻止这种混合环境，但不得自动删除用户补丁。
+- 运行环境必须显式区分 `steam_official`、`steam_seamless`、`spacewar_seamless` 和 `auto/unknown_mixed`。只有 Spacewar + Seamless 由当前用户完成过真实启动验证；两种正版模式只能标注为保守逻辑/自动化测试通过，不能宣称实测。
+- 启动参数矩阵：纯正版 Steam 和正版 Steam + Seamless 均不追加 `--skip-steam-init` 或 `--online`；Spacewar + Seamless 使用已验证的两项参数；MMV Server Redirector 只追加 `--online`。正版两种模式及 MMV 必须能匹配 `appmanifest_2622380.acf`。
 
 ## 技术栈
 
@@ -163,7 +166,9 @@ cd /d "{me3_path}\bin"
 - SeamlessCoop/Spacewar 环境下，直接双击 `nrsc_launcher.exe` 可以正常进游戏，但通过 ME3 加载 Mod 时不能把 `nrsc_launcher.exe` 作为 `--exe` 传入。
 - 如果用户设置了 `nrsc_launcher.exe`，当前实现会在 ME3 启动链路中自动改用同目录的 `nightreign.exe`，并通过 profile 加载 `SeamlessCoop\nrsc.dll`。
 - `generate_me3_profile()` 会自动检测游戏根目录下的 `SeamlessCoop\nrsc.dll` 和 `SeamlessCoop\nighter.dll`。存在时加入 `[[natives]]`，其中 `nrsc.dll` 必须 `load_early = true`。
-- 当前启动参数 `--skip-steam-init --online --game nightreign` 是参考 Nmodm 后在用户当前环境中验证成功的组合。
+- `--skip-steam-init --online --game nightreign` 是 SeamlessCoop/Spacewar 环境中已验证成功的组合。
+- MMV Server Redirector 必须改用 `--online --game nightreign`，不得追加 `--skip-steam-init`，否则会跳过 Redirector 所依赖的正版 Steam 身份初始化。
+- 普通正版 Mod 方案默认使用 `NR0000.nmm`，避免写入官方 `NR0000.sl2`。Seamless 存档名从 `nrsc_settings.ini` 的 `save_file_extension` 推断，默认 `NR0000.co2`。每次实际启动和诊断启动前都应备份当前有效存档及 `.bak`。
 - 不要再使用 `cmd /C start "Nightreign-ME3" ...` 这类写法。Windows 对 `start` 的 title 参数解析容易导致类似找不到 `VNightreign-ME3\` 或 `WNightreign-ME3\` 的错误。
 - 当前稳定写法是生成 bat，然后 `cmd /K <bat>`，并通过 Windows `CREATE_NEW_CONSOLE` 打开独立控制台。
 - 从 `dev.bat` 启动 Tauri 后，ME3 输出不一定会出现在原终端。启动诊断应优先看 `launch\last-launch.log` 和独立控制台。
@@ -205,7 +210,7 @@ load_before = []
 - `C:\Users\34590\AppData\Roaming\nightreign-mod-manager\launch\launch-nightreign.bat`
 - `C:\Users\34590\AppData\Roaming\nightreign-mod-manager\active-nightreign.me3`
 - ME3 自身日志，例如 `C:\Users\34590\AppData\Local\garyttierney\me3\data\logs\active-nightreign\*.log`
-- bat 中是否仍然是 `--exe nightreign.exe`，并包含 `--skip-steam-init`、`--online`、`--game nightreign`、`-p active-nightreign.me3`
+- bat 中是否仍然是 `--exe nightreign.exe`，并包含 `--online`、`--game nightreign`、`-p active-nightreign.me3`；只有 SeamlessCoop/Spacewar 路线应包含 `--skip-steam-init`
 
 ## Mod 扫描与 profile 生成
 
@@ -215,8 +220,17 @@ load_before = []
 - 无 `.me3` 的资源包 Mod 会根据 `parts/`、`chr/`、`sfx/`、`map/`、`regulation.bin`、`.dcx` 等结构推断为 package。
 - DLL-only Mod 会推断为 native。
 - `.me3` 解析同时兼容 `[[packages]]` 和 `[[package]]`。
+- 外部作者 `.me3` 采用语义保真生成：保留 `savefile`、`start_online`、未知根字段及条目扩展字段，相对路径在生成副本中解析为绝对路径，原文件保持只读。
+- 联机后端按实际 native 自动判定。检测到 `cl_server_redirector.dll` 时禁止自动注入游戏根目录的 `nrsc.dll/nighter.dll`；Server Redirector 与 Seamless/nighter 同时出现必须阻止生成和启动。
+- Server Redirector 作者 Profile 必须位于实际游戏 `Game` 目录之外。MMV 的 `supports.game = "nightrein"` 只在生成副本中规范为 `nightreign`。
+- Server Redirector 遇到 OnlineFix/Spacewar 文件或未运行 Steam 时必须阻止实际启动，不能只显示 warning。现有 Spacewar 目录应原样保留，用户需要另选干净的正版 Steam `Game` 目录。
+- `nighter.dll` 不是 Seamless 联机后端；只有 `nrsc.dll` 才能判定为 Seamless。`nighter.dll` 仍与 Server Redirector 冲突，但不能单独触发 Seamless 启动参数。
+- MMV 作者 Profile 的 `NR0000.co2` 与 Seamless 默认存档同名，不得再描述为独立存档。管理器应显示警告并在启动前备份。
+- OnlineFix/Spacewar 补丁安装只允许 `spacewar_seamless` 环境，且 Steam AppManifest 对应的正版目录必须硬阻止。覆盖前备份固定受管文件，复制失败自动回滚，并提供按清单恢复最近备份的命令；不得扫描或删除清单外文件。
 - 生成 `active-nightreign.me3` 时优先按 active profile 中 enabled 的 Mod 和 `loadOrder` 排序；如果 active profile 没有启用项，则回退到目录级 enabled 状态。
 - package/native 去重时必须保留顺序，不能改成纯排序输出，否则会破坏 profile 加载顺序。
+- 外部 MMV 作者 Profile 可以显式选择 `mmv_seamless_community` 社区兼容模式。它不是作者官方支持路线，只能在生成的 `active-nightreign.me3` 副本中移除 `cl_server_redirector.dll`，再使用游戏目录现有的 `SeamlessCoop\nrsc.dll`；原 `.me3`、DLL、package 和 `regulation.bin` 必须保持只读。该模式只允许明确的 Steam + Seamless 或 Spacewar + Seamless 环境，并要求恰好一个 package 根级 `regulation.bin`。
+- MMV 社区兼容模式的启动前检查必须显示玩法 `regulation.bin` 和简中 `item/menu_dlc01.msgbnd.dcx` 的 SHA-256；完整 `msg\zhocn` 覆盖层只能启用一份。602 与 559 覆盖同一文本集合，不得同时启用。602 当前主文件上传于 2026-07-22（314 KB），Changelog 明确标注同步 2.1.7.1；页面顶部仍显示 2.1.6，因此版本判断应同时记录上传日期、Changelog 和文件哈希，不能只读顶部版本号。
 
 ## 已实现功能
 
@@ -229,6 +243,7 @@ load_before = []
 - Mod 卡片：显示类型、说明、文件数量，支持开关和删除。
 - 应用内 toast 和确认弹层，删除前确认。
 - ZIP 安装到 `{game_path}\mods\`，带单根目录剥离、安全路径检查、重复目录自动编号。
+- ZIP 的单根目录剥离只能移除真实包装目录；`parts`、`chr`、`map`、`msg`、`zhocn` 等游戏语义根和单个 `regulation.bin` 必须保留。完整汉化若以 `zhocn\item/menu_dlc01.msgbnd.dcx` 或两个文件直接位于压缩包根提供，安装时规范到 `msg\zhocn\`；多套或半套布局应取消安装，不能猜覆盖顺序。
 - Rust 后端：配置读写、Mod 扫描、profile JSON 存储、ME3 profile 生成、bat 启动脚本、启动日志。
 - 诊断页已支持生成/查看 profile、启动脚本、日志、启动诊断和真实文件级冲突分析。
 - 启动台已支持不会真正启动游戏的启动前检查，检查游戏/ME3/启动目标、Steam、残留进程、联机组件、深夜解锁和启用 Mod；`error` 阻止启动，`warning` 只提醒。
@@ -261,8 +276,11 @@ load_before = []
 
 1. 阅读本文件，确认长期架构、启动链路和安全边界。
 2. 阅读 `docs/CURRENT_STATUS.md`，确认当前工作树、最新验证结果、尚未回归的风险和下一步顺序。
-3. 涉及更新视频或评论需求时，再阅读 `docs/VIDEO_UPDATE_PLAN.md`；其中视频数据是带日期的快照，发布前必须重新获取。
-4. 执行 `git status --short`，不要假设文档记录之后工作树没有继续变化。
+3. 涉及 Spacewar + Seamless 的地图/敌人/武器/中文整合时，阅读
+   `docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md`；它记录专项目标、本地样本、
+   失败边界、研究来源和最小验证顺序。
+4. 涉及更新视频或评论需求时，再阅读 `docs/VIDEO_UPDATE_PLAN.md`；其中视频数据是带日期的快照，发布前必须重新获取。
+5. 执行 `git status --short`，不要假设文档记录之后工作树没有继续变化。
 
 `docs/CURRENT_STATUS.md` 是短期交接文件，应在重要功能完成、验证结论变化或准备新会话时更新；本文件只保存长期有效的规则。不要把普通开发日志或系统级 Skill 安装明细持续堆进 `AGENTS.md`。
 
@@ -283,6 +301,23 @@ load_before = []
 - Tauri 前端只保留实际使用的 dialog 权限；不要重新开放 `fs:read-all`、`fs:write-all` 或 shell 执行权限，除非有明确需求、最小 scope 和安全审查。生产 CSP 不得设为 `null`。
 - `Cargo.lock` 和 `app/src-tauri/icons/` 是可复现构建和打包所需文件，应提交；`target/`、`dist/` 继续忽略。
 - 新增涉及 profile、Mod 安装、启动游戏的功能时，优先加 Rust 单元/集成测试，至少执行 `cargo fmt --all -- --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo check`、`cargo test`、`npm run build`、`npm run lint`。
+- 开始真实样本、安装事务、浏览器下载或跨项目管理器工作前，先在
+  `D:\Project\CodexReviewHub` 运行 `scripts\Get-ReviewContext.ps1`，查询具体技术与
+  失败模式并读取最相关的 3–5 张复盘卡。把命中的规则分成“可直接复用、领域差异、
+  本项目需新增”三类写入执行清单；实际复用后用 `Add-ReviewReuse.ps1` 记录结果，
+  不要等用户再次指出另一个仓库才回读经验。
+- 开发期需要从 Nexus 获取真实样本时，复用
+  `D:\Project\Game-create\Cyberpunk2077-ModManager\docs\reviews\2026-07-12-in-app-browser-download-real-sample-loop.review.json`
+  的已验证流程：从官方文件列表确定精确 `file_id`，在用户已登录的浏览器中进入
+  对应下载确认页，Cloudflare/登录由用户处理，自动化只点击唯一的 Slow download
+  并等待至少 80 秒的下载事件；随后同时检查文件落盘、大小和 SHA-256。不要刷新
+  正在等待的下载页，不要绕过验证码，也不要把开发期浏览器下载扩展为管理器内置
+  Nexus 登录/API 功能。
+- 跨项目真实样本统一暂存在
+  `D:\Project\Game-create\_downloads\<game-or-project>\`，不要直接散落在
+  `D:\Project\Game-create` 根目录。若内置浏览器只能先下载到系统 `Downloads`，
+  先核对落盘、大小和 SHA-256，再复制到暂存区并保留原始文件名、来源与证据；
+  项目需要长期样本时再放入 Git 忽略的项目样本目录。
 - Windows 文件操作不要用字符串拼接构造删除/移动命令；优先使用 Rust 标准库或 PowerShell 原生命令，并确认目标路径。
 - 当前 worktree 可能包含大量未提交改动。不要 `git reset --hard`，不要 revert 与当前任务无关的文件。
 

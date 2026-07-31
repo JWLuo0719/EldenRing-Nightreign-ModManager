@@ -1,6 +1,8 @@
 use super::profile;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -14,6 +16,8 @@ const MAX_LAUNCH_LOG_READ_BYTES: u64 = 512 * 1024;
 const MAX_CONFLICT_FILES_SCANNED: usize = 500_000;
 const MAX_CONFLICT_RESULTS: usize = 10_000;
 const MAX_SCAN_DEPTH: usize = 64;
+const RECOMMENDED_ME3_VERSION: (u32, u32, u32) = (0, 12, 1);
+const OFFICIAL_MOD_SAVEFILE: &str = "NR0000.nmm";
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -33,6 +37,22 @@ pub struct ModInfo {
     pub source: String,
     #[serde(rename = "configFiles")]
     pub config_files: Vec<String>,
+    #[serde(rename = "authorProfile")]
+    pub author_profile: bool,
+    #[serde(rename = "networkBackend")]
+    pub network_backend: String,
+    pub savefile: String,
+    #[serde(rename = "startOnline")]
+    pub start_online: Option<bool>,
+    #[serde(rename = "profileMode")]
+    pub profile_mode: ExternalProfileMode,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModInstallResult {
+    pub path: String,
+    pub zhocn_layout_normalized: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,6 +61,8 @@ pub struct AppConfig {
     pub me3_path: String,
     #[serde(default)]
     pub launch_exe_path: String,
+    #[serde(default)]
+    pub runtime_environment: RuntimeEnvironment,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,10 +97,24 @@ pub struct SpecialModStatus {
     pub game_path: String,
     pub seamless_installed: bool,
     pub onlinefix_installed: bool,
+    pub server_redirector_conflicts: Vec<String>,
     pub nighter_available: bool,
     pub nighter_path: String,
     pub nighter_config_path: String,
     pub missing_game_files: Vec<String>,
+    pub latest_patch_backup: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeEnvironmentStatus {
+    pub configured: String,
+    pub detected: String,
+    pub effective: String,
+    pub verified: bool,
+    pub confidence: String,
+    pub evidence: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,15 +139,102 @@ struct TasklistProcess {
     pid: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq)]
 struct PackageEntry {
     path: PathBuf,
+    fields: toml::Table,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq)]
 struct NativeEntry {
     path: PathBuf,
     load_early: bool,
+    fields: toml::Table,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct AuthorProfileMetadata {
+    root_fields: toml::Table,
+    source_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum NetworkBackend {
+    #[default]
+    None,
+    Seamless,
+    ServerRedirector,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalProfileMode {
+    #[default]
+    Author,
+    MmvSeamlessCommunity,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEnvironment {
+    #[default]
+    Auto,
+    SteamOfficial,
+    SteamSeamless,
+    SpacewarSeamless,
+    UnknownMixed,
+}
+
+impl RuntimeEnvironment {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::SteamOfficial => "steam_official",
+            Self::SteamSeamless => "steam_seamless",
+            Self::SpacewarSeamless => "spacewar_seamless",
+            Self::UnknownMixed => "unknown_mixed",
+        }
+    }
+}
+
+impl NetworkBackend {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Seamless => "seamless",
+            Self::ServerRedirector => "server_redirector",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct GeneratedProfilePlan {
+    content: String,
+    network_backend: NetworkBackend,
+    author_profile_sources: Vec<PathBuf>,
+    savefile: Option<String>,
+    start_online: Option<bool>,
+    selected_mod_count: usize,
+    package_count: usize,
+    native_count: usize,
+    mmv_seamless_community_count: usize,
+    regulation_files: Vec<PathBuf>,
+    zhocn_packages: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchBackupManifest {
+    game_path: String,
+    created_at: String,
+    files: Vec<PatchBackupFile>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchBackupFile {
+    relative_path: String,
+    existed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -127,6 +250,8 @@ struct ExternalModEntry {
     path: String,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    profile_mode: ExternalProfileMode,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -182,12 +307,14 @@ fn load_config() -> AppConfig {
             game_path: String::new(),
             me3_path: String::new(),
             launch_exe_path: String::new(),
+            runtime_environment: RuntimeEnvironment::Auto,
         })
     } else {
         AppConfig {
             game_path: String::new(),
             me3_path: String::new(),
             launch_exe_path: String::new(),
+            runtime_environment: RuntimeEnvironment::Auto,
         }
     }
 }
@@ -245,6 +372,22 @@ pub fn set_game_path(path: String) -> Result<(), String> {
         config.launch_exe_path.clear();
     }
     config.game_path = path;
+    save_config(&config)
+}
+
+#[command]
+pub fn get_runtime_environment_status() -> RuntimeEnvironmentStatus {
+    let config = load_config();
+    build_runtime_environment_status(&config)
+}
+
+#[command]
+pub fn set_runtime_environment(environment: RuntimeEnvironment) -> Result<(), String> {
+    if environment == RuntimeEnvironment::UnknownMixed {
+        return Err("无法把“未知/混合环境”保存为运行模式，请选择自动检测或明确环境。".to_string());
+    }
+    let mut config = load_config();
+    config.runtime_environment = environment;
     save_config(&config)
 }
 
@@ -334,7 +477,7 @@ fn parse_mod_folder(path: &Path, enabled: bool) -> Option<ModInfo> {
     let id = strip_disabled_suffix(&folder_name).to_string();
 
     let me3_files = find_top_level_me3_files(path);
-    let (description, version, mod_type) = if let Some(me3_file) = me3_files.first() {
+    let (mut description, version, mod_type) = if let Some(me3_file) = me3_files.first() {
         let content = fs::read_to_string(me3_file).unwrap_or_default();
         parse_me3_content(&content)
     } else if has_dll_file(path) && !has_package_like_content(path) {
@@ -342,12 +485,16 @@ fn parse_mod_folder(path: &Path, enabled: bool) -> Option<ModInfo> {
     } else {
         (String::new(), String::new(), "package".to_string())
     };
+    if description.is_empty() && is_complete_zhocn_package(path) {
+        description = "完整简体中文文本覆盖层；启动前会检查是否重复并显示关键文件指纹".to_string();
+    }
 
     let files = fs::read_dir(path)
         .ok()?
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
+    let profile_summary = inspect_author_profile(path);
 
     Some(ModInfo {
         id: id.clone(),
@@ -361,6 +508,11 @@ fn parse_mod_folder(path: &Path, enabled: bool) -> Option<ModInfo> {
         files,
         source: "local".to_string(),
         config_files: find_config_files(path),
+        author_profile: profile_summary.author_profile,
+        network_backend: profile_summary.network_backend.as_str().to_string(),
+        savefile: profile_summary.savefile.unwrap_or_default(),
+        start_online: profile_summary.start_online,
+        profile_mode: ExternalProfileMode::Author,
     })
 }
 
@@ -395,6 +547,13 @@ fn parse_native_file(path: &Path, source: &str) -> Option<ModInfo> {
             .into_iter()
             .map(|path| path.to_string_lossy().to_string())
             .collect(),
+        author_profile: false,
+        network_backend: network_backend_for_native_path(&active_path)
+            .as_str()
+            .to_string(),
+        savefile: String::new(),
+        start_online: None,
+        profile_mode: ExternalProfileMode::Author,
     })
 }
 
@@ -409,6 +568,13 @@ fn collect_external_mods() -> Vec<ModInfo> {
         mod_info.id = external_id("package", &path);
         mod_info.source = "external_package".to_string();
         mod_info.enabled = entry.enabled;
+        mod_info.profile_mode = entry.profile_mode;
+        if entry.profile_mode == ExternalProfileMode::MmvSeamlessCommunity {
+            mod_info.network_backend = NetworkBackend::Seamless.as_str().to_string();
+            mod_info.description =
+                "社区 Seamless 兼容模式：只在生成副本中用 nrsc.dll 替代作者 Server Redirector"
+                    .to_string();
+        }
         mods.push(mod_info);
     }
 
@@ -443,6 +609,11 @@ fn external_package_fallback(path: &Path, enabled: bool) -> ModInfo {
         files: Vec::new(),
         source: "external_package".to_string(),
         config_files: find_config_files(path),
+        author_profile: false,
+        network_backend: "none".to_string(),
+        savefile: String::new(),
+        start_online: None,
+        profile_mode: ExternalProfileMode::Author,
     }
 }
 
@@ -467,6 +638,11 @@ fn external_native_fallback(path: &Path, enabled: bool) -> ModInfo {
             .into_iter()
             .map(|path| path.to_string_lossy().to_string())
             .collect(),
+        author_profile: false,
+        network_backend: network_backend_for_native_path(path).as_str().to_string(),
+        savefile: String::new(),
+        start_online: None,
+        profile_mode: ExternalProfileMode::Author,
     }
 }
 
@@ -526,6 +702,58 @@ fn parse_me3_content(content: &str) -> (String, String, String) {
     (description, version, mod_type)
 }
 
+#[derive(Debug, Default)]
+struct AuthorProfileSummary {
+    author_profile: bool,
+    network_backend: NetworkBackend,
+    savefile: Option<String>,
+    start_online: Option<bool>,
+}
+
+fn inspect_author_profile(mod_dir: &Path) -> AuthorProfileSummary {
+    let mut summary = AuthorProfileSummary::default();
+
+    for me3_file in find_top_level_me3_files(mod_dir) {
+        let Ok(content) = fs::read_to_string(me3_file) else {
+            continue;
+        };
+        let Ok(value) = content.parse::<toml::Value>() else {
+            continue;
+        };
+
+        summary.author_profile = true;
+        if summary.savefile.is_none() {
+            summary.savefile = value
+                .get("savefile")
+                .and_then(toml::Value::as_str)
+                .map(ToOwned::to_owned);
+        }
+        if summary.start_online.is_none() {
+            summary.start_online = value.get("start_online").and_then(toml::Value::as_bool);
+        }
+
+        if let Some(natives) = value.get("natives").and_then(toml::Value::as_array) {
+            for native in natives {
+                let Some(path) = native.get("path").and_then(toml::Value::as_str) else {
+                    continue;
+                };
+                let backend = network_backend_for_native_path(Path::new(path));
+                match (summary.network_backend, backend) {
+                    (_, NetworkBackend::ServerRedirector) => {
+                        summary.network_backend = NetworkBackend::ServerRedirector;
+                    }
+                    (NetworkBackend::None, NetworkBackend::Seamless) => {
+                        summary.network_backend = NetworkBackend::Seamless;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    summary
+}
+
 fn extract_display_name(folder_name: &str) -> String {
     if let Some(end) = folder_name.find('-') {
         let prefix = &folder_name[..end];
@@ -543,13 +771,13 @@ pub fn get_mod_info(mod_path: String) -> Result<ModInfo, String> {
 }
 
 #[command]
-pub async fn install_mod_from_zip(zip_path: String) -> Result<String, String> {
+pub async fn install_mod_from_zip(zip_path: String) -> Result<ModInstallResult, String> {
     tauri::async_runtime::spawn_blocking(move || install_mod_from_zip_blocking(&zip_path))
         .await
         .map_err(|error| format!("ZIP 安装任务异常结束：{error}"))?
 }
 
-fn install_mod_from_zip_blocking(zip_path: &str) -> Result<String, String> {
+fn install_mod_from_zip_blocking(zip_path: &str) -> Result<ModInstallResult, String> {
     let zip_path = Path::new(&zip_path);
     let config = load_config();
     let mods_dir = mods_dir_from_config(&config)?;
@@ -569,11 +797,16 @@ fn install_mod_from_zip_blocking(zip_path: &str) -> Result<String, String> {
     let extract_dir = unique_destination(&mods_dir.join(sanitize_folder_name(&file_name)));
     fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
 
-    extract_zip(zip_path, &extract_dir).inspect_err(|_| {
-        let _ = fs::remove_dir_all(&extract_dir);
-    })?;
+    let zhocn_layout_normalized = extract_zip(zip_path, &extract_dir)
+        .and_then(|_| normalize_zhocn_layout(&extract_dir))
+        .inspect_err(|_| {
+            let _ = fs::remove_dir_all(&extract_dir);
+        })?;
 
-    Ok(extract_dir.to_string_lossy().to_string())
+    Ok(ModInstallResult {
+        path: extract_dir.to_string_lossy().to_string(),
+        zhocn_layout_normalized,
+    })
 }
 
 #[command]
@@ -594,6 +827,7 @@ pub fn add_external_mod(path: String) -> Result<(), String> {
         config.packages.push(ExternalModEntry {
             path: normalized,
             enabled: true,
+            profile_mode: ExternalProfileMode::Author,
         });
     }
     save_external_mods_config(&config)
@@ -674,6 +908,26 @@ pub fn toggle_external_mod(mod_id: String, enabled: bool) -> Result<(), String> 
 }
 
 #[command]
+pub fn set_external_mod_profile_mode(
+    mod_id: String,
+    profile_mode: ExternalProfileMode,
+) -> Result<(), String> {
+    let mut config = load_external_mods_config();
+    let entry = config
+        .packages
+        .iter_mut()
+        .find(|entry| external_id("package", Path::new(&entry.path)) == mod_id)
+        .ok_or_else(|| "未找到外部 Mod 注册项".to_string())?;
+
+    if profile_mode == ExternalProfileMode::MmvSeamlessCommunity {
+        validate_mmv_seamless_candidate(Path::new(&entry.path))?;
+    }
+
+    entry.profile_mode = profile_mode;
+    save_external_mods_config(&config)
+}
+
+#[command]
 pub fn read_mod_config_file(path: String) -> Result<String, String> {
     let config_path = validate_editable_config_path(&path)?;
     fs::read_to_string(&config_path)
@@ -727,18 +981,106 @@ fn extract_zip(zip_path: &Path, extract_dir: &Path) -> Result<(), String> {
 }
 
 fn detect_single_zip_root(archive: &mut ZipArchive<File>) -> Result<Option<PathBuf>, String> {
-    let mut roots = BTreeSet::new();
+    let mut root: Option<PathBuf> = None;
+    let mut found_file = false;
 
     for index in 0..archive.len() {
         let zip_file = archive.by_index(index).map_err(|e| e.to_string())?;
-        if let Some(path) = zip_file.enclosed_name() {
-            if let Some(Component::Normal(root)) = path.components().next() {
-                roots.insert(PathBuf::from(root));
-            }
+        if zip_file.is_dir() {
+            continue;
         }
+        let Some(path) = zip_file.enclosed_name() else {
+            return Err("ZIP中包含不安全路径".to_string());
+        };
+        let components = path.components().collect::<Vec<_>>();
+        let Some(Component::Normal(first)) = components.first() else {
+            return Ok(None);
+        };
+        if components.len() < 2 || is_semantic_zip_root(first) {
+            return Ok(None);
+        }
+
+        let candidate = PathBuf::from(first);
+        if root.as_ref().is_some_and(|current| current != &candidate) {
+            return Ok(None);
+        }
+        root = Some(candidate);
+        found_file = true;
     }
 
-    Ok((roots.len() == 1).then(|| roots.into_iter().next().unwrap()))
+    Ok(found_file.then_some(root).flatten())
+}
+
+fn is_semantic_zip_root(root: &OsStr) -> bool {
+    let root = root.to_string_lossy().to_ascii_lowercase();
+    matches!(
+        root.as_str(),
+        "action"
+            | "asset"
+            | "chr"
+            | "event"
+            | "hks"
+            | "map"
+            | "menu"
+            | "msg"
+            | "parts"
+            | "script"
+            | "sd"
+            | "sfx"
+            | "sound"
+            | "zhocn"
+    )
+}
+
+fn normalize_zhocn_layout(package_root: &Path) -> Result<bool, String> {
+    const ITEM_FILE: &str = "item_dlc01.msgbnd.dcx";
+    const MENU_FILE: &str = "menu_dlc01.msgbnd.dcx";
+
+    let canonical = package_root.join("msg").join("zhocn");
+    let canonical_item = canonical.join(ITEM_FILE);
+    let canonical_menu = canonical.join(MENU_FILE);
+    if canonical_item.is_file() && canonical_menu.is_file() {
+        return Ok(false);
+    }
+
+    let candidates = [package_root.join("zhocn"), package_root.to_path_buf()]
+        .into_iter()
+        .filter(|root| root.join(ITEM_FILE).is_file() && root.join(MENU_FILE).is_file())
+        .collect::<Vec<_>>();
+
+    if candidates.is_empty() {
+        return Ok(false);
+    }
+    if candidates.len() > 1 || canonical_item.exists() || canonical_menu.exists() {
+        return Err(
+            "汉化 ZIP 同时包含多套或不完整的 zhocn 布局，已取消安装以避免覆盖顺序不确定"
+                .to_string(),
+        );
+    }
+
+    let source = &candidates[0];
+    fs::create_dir_all(&canonical).map_err(|error| {
+        format!(
+            "创建标准汉化目录失败 {}：{error}",
+            canonical.to_string_lossy()
+        )
+    })?;
+    for file_name in [ITEM_FILE, MENU_FILE] {
+        let from = source.join(file_name);
+        let to = canonical.join(file_name);
+        fs::rename(&from, &to).map_err(|error| {
+            format!(
+                "规范汉化目录失败 {} -> {}：{error}",
+                from.to_string_lossy(),
+                to.to_string_lossy()
+            )
+        })?;
+    }
+
+    if source != package_root {
+        let _ = fs::remove_dir(source);
+    }
+    Ok(true)
 }
 
 fn strip_zip_root(path: &Path, root: Option<&Path>) -> PathBuf {
@@ -856,28 +1198,245 @@ fn validate_direct_child(managed_root: &Path, candidate: &Path) -> Result<PathBu
 
 #[command]
 pub fn generate_me3_profile() -> Result<String, String> {
+    let plan = build_generated_profile_plan()?;
+    let profile_path = write_generated_profile(&plan)?;
+    Ok(profile_path.to_string_lossy().to_string())
+}
+
+fn write_generated_profile(plan: &GeneratedProfilePlan) -> Result<PathBuf, String> {
+    let profile_path = get_generated_profile_path();
+    fs::write(&profile_path, &plan.content).map_err(|e| e.to_string())?;
+    Ok(profile_path)
+}
+
+fn build_generated_profile_plan() -> Result<GeneratedProfilePlan, String> {
     let mods = collect_mods()?;
     let selected_mods = mods_selected_for_generation(&mods);
+    let selected_mod_count = selected_mods.len();
+    let config = load_config();
     let mut packages = Vec::new();
     let mut natives = Vec::new();
+    let mut metadata = AuthorProfileMetadata::default();
     let mut seen_packages = BTreeSet::new();
     let mut seen_natives = BTreeSet::new();
+    let mut mmv_seamless_community_count = 0;
 
     for mod_info in selected_mods {
         let mod_dir = Path::new(&mod_info.path);
-        let (mod_packages, mod_natives) = collect_entries_for_mod(mod_dir)?;
+        let (mod_packages, mut mod_natives, mut mod_metadata) =
+            collect_profile_data_for_mod(mod_dir)?;
+        if mod_info.profile_mode == ExternalProfileMode::MmvSeamlessCommunity {
+            apply_mmv_seamless_community_override(
+                mod_dir,
+                &mod_packages,
+                &mut mod_natives,
+                &mut mod_metadata,
+                &config,
+            )?;
+            mmv_seamless_community_count += 1;
+        }
         extend_unique_packages(&mut packages, &mut seen_packages, mod_packages);
         extend_unique_natives(&mut natives, &mut seen_natives, mod_natives);
+        merge_author_profile_metadata(&mut metadata, mod_metadata)?;
     }
 
-    let config = load_config();
-    let external_natives = infer_game_root_natives(Path::new(&config.game_path));
-    extend_unique_natives(&mut natives, &mut seen_natives, external_natives);
+    let selected_backend = detect_network_backend(&natives)?;
+    if selected_backend == NetworkBackend::ServerRedirector {
+        let game_dir = Path::new(&config.game_path);
+        if metadata.source_paths.iter().any(|path| {
+            path.parent()
+                .is_some_and(|parent| is_path_inside_dir(parent, game_dir))
+        }) {
+            return Err(
+                "Server Redirector 整合包必须放在实际 Game 目录之外；请移动目录后重新注册。"
+                    .to_string(),
+            );
+        }
+    }
+    if selected_backend != NetworkBackend::ServerRedirector {
+        let game_root_natives = infer_game_root_natives(Path::new(&config.game_path));
+        extend_unique_natives(&mut natives, &mut seen_natives, game_root_natives);
+    }
+    let network_backend = detect_network_backend(&natives)?;
+    apply_safe_default_savefile(
+        &mut metadata,
+        effective_runtime_environment(&config),
+        network_backend,
+        selected_mod_count,
+    );
+    let savefile = metadata
+        .root_fields
+        .get("savefile")
+        .and_then(toml::Value::as_str)
+        .map(ToOwned::to_owned);
+    let start_online = metadata
+        .root_fields
+        .get("start_online")
+        .and_then(toml::Value::as_bool);
+    let author_profile_sources = metadata.source_paths.clone();
+    let regulation_files = collect_regulation_files(&packages);
+    let zhocn_packages = collect_zhocn_packages(&packages);
+    let content = build_me3_profile(&metadata, &packages, &natives)?;
 
-    let profile_path = get_generated_profile_path();
-    let content = build_me3_profile(&packages, &natives);
-    fs::write(&profile_path, content).map_err(|e| e.to_string())?;
-    Ok(profile_path.to_string_lossy().to_string())
+    Ok(GeneratedProfilePlan {
+        content,
+        network_backend,
+        author_profile_sources,
+        savefile,
+        start_online,
+        selected_mod_count,
+        package_count: packages.len(),
+        native_count: natives.len(),
+        mmv_seamless_community_count,
+        regulation_files,
+        zhocn_packages,
+    })
+}
+
+fn apply_safe_default_savefile(
+    metadata: &mut AuthorProfileMetadata,
+    environment: RuntimeEnvironment,
+    network_backend: NetworkBackend,
+    selected_mod_count: usize,
+) {
+    if environment == RuntimeEnvironment::SteamOfficial
+        && network_backend == NetworkBackend::None
+        && selected_mod_count > 0
+        && !metadata.root_fields.contains_key("savefile")
+    {
+        metadata.root_fields.insert(
+            "savefile".to_string(),
+            toml::Value::String(OFFICIAL_MOD_SAVEFILE.to_string()),
+        );
+    }
+}
+
+fn runtime_environment_label(environment: RuntimeEnvironment) -> &'static str {
+    match environment {
+        RuntimeEnvironment::Auto => "自动检测",
+        RuntimeEnvironment::SteamOfficial => "纯正版 Steam",
+        RuntimeEnvironment::SteamSeamless => "正版 Steam + Seamless",
+        RuntimeEnvironment::SpacewarSeamless => "Spacewar + Seamless",
+        RuntimeEnvironment::UnknownMixed => "未知或混合环境",
+    }
+}
+
+fn effective_save_filename(
+    plan: &GeneratedProfilePlan,
+    environment: RuntimeEnvironment,
+    game_dir: &Path,
+) -> Result<String, String> {
+    let filename = if let Some(savefile) = plan.savefile.as_deref() {
+        savefile.trim().to_string()
+    } else if plan.network_backend == NetworkBackend::Seamless
+        || matches!(
+            environment,
+            RuntimeEnvironment::SteamSeamless | RuntimeEnvironment::SpacewarSeamless
+        )
+    {
+        seamless_save_filename(game_dir).unwrap_or_else(|| "NR0000.co2".to_string())
+    } else {
+        "NR0000.sl2".to_string()
+    };
+    validate_save_filename(&filename)?;
+    Ok(filename)
+}
+
+fn validate_save_filename(filename: &str) -> Result<(), String> {
+    let path = Path::new(filename);
+    let mut components = path.components();
+    if filename.is_empty()
+        || !matches!(components.next(), Some(Component::Normal(_)))
+        || components.next().is_some()
+        || path.file_name().and_then(|name| name.to_str()) != Some(filename)
+    {
+        return Err(format!(
+            "Profile 的 savefile 不是安全的单文件名，已阻止启动：{filename}"
+        ));
+    }
+    Ok(())
+}
+
+fn seamless_save_filename(game_dir: &Path) -> Option<String> {
+    let settings_path = game_dir.join("SeamlessCoop").join("nrsc_settings.ini");
+    let content = fs::read_to_string(settings_path).ok()?;
+    let extension = content.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.starts_with(';') {
+            return None;
+        }
+        let (key, value) = trimmed.split_once('=')?;
+        key.trim()
+            .eq_ignore_ascii_case("save_file_extension")
+            .then(|| {
+                value
+                    .trim()
+                    .trim_matches('"')
+                    .trim_start_matches('.')
+                    .to_string()
+            })
+    })?;
+    if extension.is_empty()
+        || !extension
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some(format!("NR0000.{extension}"))
+}
+
+fn backup_effective_save(
+    plan: &GeneratedProfilePlan,
+    environment: RuntimeEnvironment,
+    game_dir: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let savefile = effective_save_filename(plan, environment, game_dir)?;
+    let Some(app_data_dir) = dirs::config_dir() else {
+        return Err("无法定位 Windows AppData，不能安全备份存档".to_string());
+    };
+    let saves_root = app_data_dir.join("Nightreign");
+    if !saves_root.exists() {
+        return Ok(None);
+    }
+    let account_dirs = fs::read_dir(&saves_root).map_err(|error| {
+        format!(
+            "读取 Nightreign 存档目录失败：{}，{error}",
+            saves_root.to_string_lossy()
+        )
+    })?;
+    let backup_dir = get_config_dir()
+        .join("backups")
+        .join("saves")
+        .join(current_timestamp().to_string());
+    let mut copied = false;
+    for entry in account_dirs.filter_map(Result::ok) {
+        let account_dir = entry.path();
+        if !account_dir.is_dir() {
+            continue;
+        }
+        let account_name = entry.file_name();
+        for candidate in [&savefile, &format!("{savefile}.bak")] {
+            let source = account_dir.join(candidate);
+            if !source.is_file() {
+                continue;
+            }
+            let target = backup_dir.join(&account_name).join(candidate);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| format!("创建存档备份目录失败：{error}"))?;
+            }
+            fs::copy(&source, &target).map_err(|error| {
+                format!(
+                    "备份存档失败，已阻止启动：{} -> {}，{error}",
+                    source.to_string_lossy(),
+                    target.to_string_lossy()
+                )
+            })?;
+            copied = true;
+        }
+    }
+    Ok(copied.then_some(backup_dir))
 }
 
 #[command]
@@ -919,6 +1478,13 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
     let mut checks = Vec::new();
     let game_dir = Path::new(&config.game_path);
     let game_valid = !config.game_path.trim().is_empty() && validate_game_dir(game_dir).is_ok();
+    let profile_plan = build_generated_profile_plan();
+    let runtime_status = build_runtime_environment_status(&config);
+    let runtime_environment = runtime_environment_from_str(&runtime_status.effective)
+        .unwrap_or(RuntimeEnvironment::UnknownMixed);
+    let using_server_redirector = profile_plan
+        .as_ref()
+        .is_ok_and(|plan| plan.network_backend == NetworkBackend::ServerRedirector);
 
     if game_valid {
         add_preflight_check(
@@ -942,13 +1508,37 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
     }
 
     match find_me3_exe(Path::new(&config.me3_path)) {
-        Ok(me3_exe) => add_preflight_check(
-            &mut checks,
-            "me3",
-            "ME3 引擎",
-            "pass",
-            format!("已找到 {}", me3_exe.to_string_lossy()),
-        ),
+        Ok(me3_exe) => {
+            let version = read_me3_version(&me3_exe);
+            let outdated = version.is_some_and(|value| value < RECOMMENDED_ME3_VERSION);
+            add_preflight_check(
+                &mut checks,
+                "me3",
+                "ME3 引擎",
+                if outdated || version.is_none() {
+                    "warning"
+                } else {
+                    "pass"
+                },
+                match version {
+                    Some(value) if outdated => format!(
+                        "检测到 ME3 {}.{}.{}；建议升级到 0.12.1 或更高。当前 Spacewar 实测链路仍允许继续。",
+                        value.0, value.1, value.2
+                    ),
+                    Some(value) => format!(
+                        "已找到 {}（ME3 {}.{}.{}）",
+                        me3_exe.to_string_lossy(),
+                        value.0,
+                        value.1,
+                        value.2
+                    ),
+                    None => format!(
+                        "已找到 {}，但无法读取版本；允许继续，建议确认不低于 0.12.1。",
+                        me3_exe.to_string_lossy()
+                    ),
+                },
+            );
+        }
         Err(error) => add_preflight_check(&mut checks, "me3", "ME3 引擎", "error", error),
     }
 
@@ -968,26 +1558,73 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
     }
 
     let tasklist_processes = read_tasklist_processes();
-    if tasklist_processes
+    let steam_running = tasklist_processes
         .iter()
-        .any(|process| process.name.eq_ignore_ascii_case("steam.exe"))
-    {
+        .any(|process| process.name.eq_ignore_ascii_case("steam.exe"));
+    if steam_running {
         add_preflight_check(
             &mut checks,
             "steam",
             "Steam 状态",
             "pass",
-            "已检测到 Steam。联机补丁仍应与 Steam 保持相同权限级别。".to_string(),
+            if using_server_redirector {
+                "已检测到 Steam；MMV Server Redirector 将使用正版 Steam 身份与邀请。".to_string()
+            } else {
+                "已检测到 Steam。联机补丁仍应与 Steam 保持相同权限级别。".to_string()
+            },
         );
     } else {
         add_preflight_check(
             &mut checks,
             "steam",
             "Steam 状态",
-            "warning",
-            "未检测到 Steam。若出现“Steam is not launched”，请先启动 Steam，并尽量让 Steam、管理器和游戏使用相同权限级别。".to_string(),
+            "error",
+            "当前支持的三种运行环境都依赖 Steam/Spacewar 身份；请先启动 Steam，并保持相同权限级别。".to_string(),
         );
     }
+
+    let runtime_validation = if game_valid {
+        profile_plan
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|plan| validate_runtime_launch_environment(plan, &config, game_dir))
+    } else {
+        Err("请先配置有效游戏目录".to_string())
+    };
+    add_preflight_check(
+        &mut checks,
+        "runtime_environment",
+        "运行环境",
+        if runtime_validation.is_ok() {
+            if runtime_status.verified {
+                "pass"
+            } else {
+                "warning"
+            }
+        } else {
+            "error"
+        },
+        match runtime_validation {
+            Ok(()) => format!(
+                "{}；检测={}，配置={}{}",
+                runtime_environment_label(runtime_environment),
+                runtime_status.detected,
+                runtime_status.configured,
+                if runtime_status.verified {
+                    "；当前用户已实测"
+                } else {
+                    "；仅完成保守逻辑与模拟测试"
+                }
+            ),
+            Err(error) => format!(
+                "{}；检测={}，配置={}。{}",
+                runtime_environment_label(runtime_environment),
+                runtime_status.detected,
+                runtime_status.configured,
+                error
+            ),
+        },
+    );
 
     let running = format_guarded_processes(&tasklist_processes);
     if running.is_empty() {
@@ -1008,35 +1645,273 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
         );
     }
 
+    match &profile_plan {
+        Ok(plan) => {
+            add_preflight_check(
+                &mut checks,
+                "network_backend",
+                "方案联机后端",
+                "pass",
+                match plan.network_backend {
+                    NetworkBackend::ServerRedirector => {
+                        "Server Redirector；已禁止自动注入游戏目录中的 nrsc.dll 与 nighter.dll"
+                            .to_string()
+                    }
+                    NetworkBackend::Seamless => {
+                        "SeamlessCoop；nrsc.dll 将 early load，nighter 按检测结果加载".to_string()
+                    }
+                    NetworkBackend::None => "未加载联机 DLL；适用于离线 Mod 方案".to_string(),
+                },
+            );
+
+            match effective_save_filename(plan, runtime_environment, game_dir) {
+                Ok(savefile) => add_preflight_check(
+                    &mut checks,
+                    "savefile",
+                    "存档隔离",
+                    if plan.network_backend == NetworkBackend::ServerRedirector
+                        && savefile.eq_ignore_ascii_case("NR0000.co2")
+                    {
+                        "warning"
+                    } else {
+                        "pass"
+                    },
+                    if plan.network_backend == NetworkBackend::ServerRedirector
+                        && savefile.eq_ignore_ascii_case("NR0000.co2")
+                    {
+                        "当前作者 Profile 使用 NR0000.co2，与 Seamless 默认存档同名；它不是独立存档。每次启动前会自动备份，但切换方案前仍应确认存档用途。".to_string()
+                    } else if runtime_environment == RuntimeEnvironment::SteamOfficial
+                        && savefile.eq_ignore_ascii_case(OFFICIAL_MOD_SAVEFILE)
+                    {
+                        format!(
+                            "普通正版 Mod 方案强制使用 {savefile}，避免写入官方 NR0000.sl2；启动前会备份已有文件。"
+                        )
+                    } else {
+                        format!("本次使用 {savefile}；如已存在，启动前会自动备份。")
+                    },
+                ),
+                Err(error) => {
+                    add_preflight_check(&mut checks, "savefile", "存档隔离", "error", error)
+                }
+            }
+
+            if plan.author_profile_sources.is_empty() {
+                add_preflight_check(
+                    &mut checks,
+                    "author_profile",
+                    "作者 Profile",
+                    "pass",
+                    "当前方案没有需要继承根字段的作者 .me3".to_string(),
+                );
+            } else {
+                let savefile = plan.savefile.as_deref().unwrap_or("未声明");
+                let start_online = plan
+                    .start_online
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "未声明".to_string());
+                add_preflight_check(
+                    &mut checks,
+                    "author_profile",
+                    "作者 Profile",
+                    "pass",
+                    format!(
+                        "已保留 {} 份作者配置；savefile={savefile}，start_online={start_online}",
+                        plan.author_profile_sources.len()
+                    ),
+                );
+            }
+
+            if plan.mmv_seamless_community_count > 0 {
+                add_preflight_check(
+                    &mut checks,
+                    "mmv_seamless_community",
+                    "MMV Seamless 兼容",
+                    "warning",
+                    format!(
+                        "已对 {} 个外部 MMV 作者 Profile 启用社区兼容模式：原文件保持只读，仅在生成副本中移除 cl_server_redirector.dll，并改由游戏目录中的 nrsc.dll early load。此路线有社区与 Spacewar 实例支持，但不受 MMV 作者团队官方支持。",
+                        plan.mmv_seamless_community_count
+                    ),
+                );
+
+                let (regulation_status, regulation_message) =
+                    match plan.regulation_files.as_slice() {
+                        [path] => match sha256_file(path) {
+                            Ok(hash) => (
+                                "pass",
+                                format!(
+                                    "检测到唯一 regulation.bin：{}；SHA-256={hash}",
+                                    path.to_string_lossy()
+                                ),
+                            ),
+                            Err(error) => ("error", error),
+                        },
+                        [] => (
+                            "error",
+                            "没有检测到 regulation.bin；地图/敌人与武器参数不会完整生效。"
+                                .to_string(),
+                        ),
+                        paths => (
+                            "error",
+                            format!(
+                                "检测到 {} 个 regulation.bin。加载顺序只能覆盖，不能合并；请只保留一个已合并资源包。",
+                                paths.len()
+                            ),
+                        ),
+                    };
+                add_preflight_check(
+                    &mut checks,
+                    "regulation_owner",
+                    "玩法参数合并",
+                    regulation_status,
+                    regulation_message,
+                );
+
+                let (zhocn_status, zhocn_message) = match plan.zhocn_packages.as_slice() {
+                    [package] => {
+                        let root = package.join("msg").join("zhocn");
+                        let item = root.join("item_dlc01.msgbnd.dcx");
+                        let menu = root.join("menu_dlc01.msgbnd.dcx");
+                        match (sha256_file(&item), sha256_file(&menu)) {
+                            (Ok(item_hash), Ok(menu_hash)) => (
+                                "pass",
+                                format!(
+                                    "检测到单一简中覆盖层：{}；item SHA-256={item_hash}；menu SHA-256={menu_hash}",
+                                    package.to_string_lossy()
+                                ),
+                            ),
+                            (Err(error), _) | (_, Err(error)) => ("error", error),
+                        }
+                    }
+                    [] => (
+                        "warning",
+                        "尚未检测到完整的 msg\\zhocn\\item_dlc01.msgbnd.dcx 与 menu_dlc01.msgbnd.dcx。玩法可以测试，但新增敌人、武器和说明可能显示英文或占位符；请安装 602 于 2026-07-22 上传的 314 KB 主文件，其 Changelog 标注同步 2.1.7.1。"
+                            .to_string(),
+                    ),
+                    packages => (
+                        "error",
+                        format!(
+                            "检测到 {} 个完整简中覆盖层。602 与 559 会覆盖同一批文本，请只启用一份当前版本翻译。",
+                            packages.len()
+                        ),
+                    ),
+                };
+                add_preflight_check(
+                    &mut checks,
+                    "zhocn_layer",
+                    "简体中文覆盖",
+                    zhocn_status,
+                    zhocn_message,
+                );
+            }
+
+            if plan.network_backend == NetworkBackend::ServerRedirector {
+                let profiles_outside_game = plan.author_profile_sources.iter().all(|path| {
+                    path.parent()
+                        .is_some_and(|parent| !is_path_inside_dir(parent, game_dir))
+                });
+                add_preflight_check(
+                    &mut checks,
+                    "external_profile_location",
+                    "MMV 外部位置",
+                    if profiles_outside_game {
+                        "pass"
+                    } else {
+                        "error"
+                    },
+                    if profiles_outside_game {
+                        "作者 Profile 位于实际 Game 目录之外，管理器只读使用原目录".to_string()
+                    } else {
+                        "Server Redirector 整合包位于实际 Game 目录内；请移动到 Game 目录之外后重新注册"
+                            .to_string()
+                    },
+                );
+            }
+        }
+        Err(error) => add_preflight_check(
+            &mut checks,
+            "profile_generation",
+            "Profile 兼容性",
+            "error",
+            error.clone(),
+        ),
+    }
+
     if game_valid {
         let status = build_special_mod_status(game_dir);
+        let redirector_environment_conflict =
+            using_server_redirector && !status.server_redirector_conflicts.is_empty();
+        let seamless_required = matches!(
+            runtime_environment,
+            RuntimeEnvironment::SteamSeamless | RuntimeEnvironment::SpacewarSeamless
+        );
         add_preflight_check(
             &mut checks,
             "seamless",
             "SeamlessCoop",
-            if status.seamless_installed {
+            if using_server_redirector
+                || (seamless_required && status.seamless_installed)
+                || (!seamless_required && !status.seamless_installed)
+            {
                 "pass"
             } else {
-                "warning"
+                "error"
             },
-            if status.seamless_installed {
+            if using_server_redirector {
+                if status.seamless_installed {
+                    "已安装，但当前 MMV 方案明确不将 nrsc.dll 注入 Profile。".to_string()
+                } else {
+                    "当前 MMV 方案使用 Server Redirector，不需要 SeamlessCoop。".to_string()
+                }
+            } else if seamless_required && status.seamless_installed {
                 "nrsc.dll 与设置文件齐全；生成 profile 时会将 nrsc.dll 设为 early load。"
                     .to_string()
+            } else if seamless_required {
+                "当前环境要求 SeamlessCoop，但 nrsc.dll 或设置文件不完整。".to_string()
+            } else if status.seamless_installed {
+                "当前选择纯正版 Steam，但目录中检测到 SeamlessCoop；请切换环境或使用干净目录。"
+                    .to_string()
             } else {
-                "未完整检测到 SeamlessCoop；只玩离线 Mod 时可忽略，联机前请补齐。".to_string()
+                "当前环境不使用 SeamlessCoop。".to_string()
             },
         );
         add_preflight_check(
             &mut checks,
             "onlinefix",
             "OnlineFix / Spacewar",
-            if status.onlinefix_installed {
+            if redirector_environment_conflict
+                || (matches!(
+                    runtime_environment,
+                    RuntimeEnvironment::SteamOfficial | RuntimeEnvironment::SteamSeamless
+                ) && !status.server_redirector_conflicts.is_empty())
+            {
+                "error"
+            } else if using_server_redirector
+                || (runtime_environment == RuntimeEnvironment::SpacewarSeamless
+                    && status.onlinefix_installed)
+                || (runtime_environment != RuntimeEnvironment::SpacewarSeamless
+                    && status.server_redirector_conflicts.is_empty())
+            {
                 "pass"
             } else {
-                "warning"
+                "error"
             },
-            if status.onlinefix_installed {
+            if redirector_environment_conflict {
+                format!(
+                    "MMV Server Redirector 只支持正版 Steam 联机环境，但当前 Game 目录检测到冲突文件：{}。为避免登录失败、黑屏或异常存档，已阻止启动；请在设置中选择干净的 Steam 正版 Game 目录。管理器不会删除现有补丁文件。",
+                    status.server_redirector_conflicts.join(", ")
+                )
+            } else if using_server_redirector {
+                "未检测到 OnlineFix；当前 MMV 方案由 Server Redirector 提供隔离联机。".to_string()
+            } else if runtime_environment == RuntimeEnvironment::SpacewarSeamless
+                && status.onlinefix_installed
+            {
                 "OnlineFix 核心文件齐全。".to_string()
+            } else if matches!(
+                runtime_environment,
+                RuntimeEnvironment::SteamOfficial | RuntimeEnvironment::SteamSeamless
+            ) && status.server_redirector_conflicts.is_empty()
+            {
+                "未检测到 OnlineFix/Spacewar 代理文件，符合当前正版环境。".to_string()
             } else {
                 format!(
                     "联机补丁文件不完整：{}",
@@ -1052,12 +1927,18 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
             &mut checks,
             "nighter",
             "深夜解锁",
-            if status.nighter_available {
+            if using_server_redirector || status.nighter_available {
                 "pass"
             } else {
                 "warning"
             },
-            if status.nighter_available {
+            if using_server_redirector {
+                if status.nighter_available {
+                    "已检测到 nighter.dll，但当前 MMV 方案不会注入它。".to_string()
+                } else {
+                    "当前 MMV 方案不加载 nighter.dll。".to_string()
+                }
+            } else if status.nighter_available {
                 format!("已检测到 {}", status.nighter_path)
             } else {
                 "未检测到 nighter.dll；不使用深夜解锁时可忽略。".to_string()
@@ -1081,7 +1962,16 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                     "当前 Mod",
                     if enabled > 0 { "pass" } else { "warning" },
                     if enabled > 0 {
-                        format!("将加载 {enabled} 个 Mod：{packages} 个资源包，{natives} 个 DLL")
+                        if let Ok(plan) = &profile_plan {
+                            format!(
+                                "将加载 {} 个 Mod：{} 个资源包，{} 个 DLL",
+                                plan.selected_mod_count, plan.package_count, plan.native_count
+                            )
+                        } else {
+                            format!(
+                                "将加载 {enabled} 个 Mod：{packages} 个资源包，{natives} 个 DLL"
+                            )
+                        }
                     } else {
                         "没有启用的 Mod；启动后只会尝试加载游戏根目录中的联机 DLL。".to_string()
                     },
@@ -1127,11 +2017,48 @@ pub fn install_seamless_onlinefix(patch_game_path: String) -> Result<SpecialModS
 
     let game_dir = Path::new(&config.game_path);
     validate_game_dir(game_dir)?;
+    if steam_manifest_for_game_dir(game_dir).is_some() {
+        return Err(
+            "当前目录属于 Steam 正版安装。为防止覆盖 steam_api64.dll，管理器禁止向该目录安装 OnlineFix/Spacewar 补丁。"
+                .to_string(),
+        );
+    }
+    if effective_runtime_environment(&config) != RuntimeEnvironment::SpacewarSeamless {
+        return Err(
+            "只有明确选择或自动识别为“Spacewar + Seamless”时才允许安装该联机补丁。正版环境不适用。"
+                .to_string(),
+        );
+    }
 
     let patch_source = Path::new(patch_game_path.trim());
     validate_patch_source(patch_source)?;
 
-    copy_patch_tree(patch_source, game_dir)?;
+    let backup_dir = create_patch_backup(game_dir)?;
+    if let Err(copy_error) = copy_patch_tree(patch_source, game_dir) {
+        return match restore_patch_backup(&backup_dir, game_dir) {
+            Ok(()) => Err(format!(
+                "安装联机补丁失败，已恢复安装前文件。原始错误：{copy_error}"
+            )),
+            Err(restore_error) => Err(format!(
+                "安装联机补丁失败，自动恢复也失败。请勿启动游戏；备份位于 {}。安装错误：{copy_error}；恢复错误：{restore_error}",
+                backup_dir.to_string_lossy()
+            )),
+        };
+    }
+    Ok(build_special_mod_status(game_dir))
+}
+
+#[command]
+pub fn restore_latest_online_patch_backup() -> Result<SpecialModStatus, String> {
+    let config = load_config();
+    if config.game_path.trim().is_empty() {
+        return Err("请先设置游戏目录".to_string());
+    }
+    let game_dir = Path::new(&config.game_path);
+    validate_game_dir(game_dir)?;
+    let backup_dir =
+        latest_patch_backup_dir().ok_or_else(|| "没有可恢复的联机补丁备份".to_string())?;
+    restore_patch_backup(&backup_dir, game_dir)?;
     Ok(build_special_mod_status(game_dir))
 }
 
@@ -1275,26 +2202,42 @@ pub fn launch_game(game_path: String, me3_path: String) -> Result<String, String
 
     ensure_no_running_game_processes()?;
 
-    let profile_path = generate_me3_profile()?;
-    let profile_path = PathBuf::from(profile_path);
+    let plan = build_generated_profile_plan()?;
+    let runtime_environment = effective_runtime_environment(&config);
+    validate_runtime_launch_environment(&plan, &config, Path::new(&game_path))?;
+    let profile_path = write_generated_profile(&plan)?;
     let me3_exe = find_me3_exe(Path::new(&me3_path))?;
     let launch_exe = resolve_launch_exe(&config, Path::new(&game_path))?;
-    let args = build_launch_args(&profile_path, &launch_exe);
+    let args = build_launch_args(
+        &profile_path,
+        &launch_exe,
+        plan.network_backend,
+        runtime_environment,
+    );
     let working_dir = me3_exe.parent().unwrap_or_else(|| Path::new(&me3_path));
     let launch_script = write_launch_script(&me3_exe, &args, working_dir)?;
+    let save_backup = backup_effective_save(&plan, runtime_environment, Path::new(&game_path))?;
     append_launch_log(&format!(
-        "\n=== Launch {} ===\nscript: {}\n{}\n",
+        "\n=== Launch {} ===\nscript: {}\nsave backup: {}\n{}\n",
         current_timestamp(),
         launch_script.to_string_lossy(),
+        save_backup.as_ref().map_or_else(
+            || "没有找到现有存档，无需备份".to_string(),
+            |path| path.to_string_lossy().to_string()
+        ),
         format_command_line(&me3_exe, &args, working_dir)
     ));
 
     launch_via_script(&launch_script)?;
 
     Ok(format!(
-        "启动脚本已执行。\n脚本：{}\n日志：{}",
+        "启动脚本已执行。\n脚本：{}\n日志：{}{}",
         launch_script.to_string_lossy(),
-        get_launch_log_path().to_string_lossy()
+        get_launch_log_path().to_string_lossy(),
+        save_backup.map_or_else(String::new, |path| format!(
+            "\n存档备份：{}",
+            path.to_string_lossy()
+        ))
     ))
 }
 
@@ -1321,16 +2264,28 @@ pub fn diagnose_launch_game(game_path: String, me3_path: String) -> Result<Strin
 
     ensure_no_running_game_processes()?;
 
-    let profile_path = generate_me3_profile()?;
-    let profile_path = PathBuf::from(profile_path);
+    let plan = build_generated_profile_plan()?;
+    let runtime_environment = effective_runtime_environment(&config);
+    validate_runtime_launch_environment(&plan, &config, Path::new(&game_path))?;
+    let profile_path = write_generated_profile(&plan)?;
     let me3_exe = find_me3_exe(Path::new(&me3_path))?;
     let launch_exe = resolve_launch_exe(&config, Path::new(&game_path))?;
-    let args = build_launch_args(&profile_path, &launch_exe);
+    let args = build_launch_args(
+        &profile_path,
+        &launch_exe,
+        plan.network_backend,
+        runtime_environment,
+    );
     let working_dir = me3_exe.parent().unwrap_or_else(|| Path::new(&me3_path));
+    let save_backup = backup_effective_save(&plan, runtime_environment, Path::new(&game_path))?;
     let command_line = format_command_line(&me3_exe, &args, working_dir);
     append_launch_log(&format!(
-        "\n=== Diagnose {} ===\n{}\n",
+        "\n=== Diagnose {} ===\nsave backup: {}\n{}\n",
         current_timestamp(),
+        save_backup.as_ref().map_or_else(
+            || "没有找到现有存档，无需备份".to_string(),
+            |path| path.to_string_lossy().to_string()
+        ),
         command_line
     ));
     let log_path = get_launch_log_path();
@@ -1499,18 +2454,146 @@ fn read_text_tail(path: &Path, max_bytes: u64) -> Result<String, String> {
     }
 }
 
-fn build_launch_args(profile_path: &Path, launch_exe: &Path) -> Vec<String> {
-    vec![
+fn validate_runtime_launch_environment(
+    plan: &GeneratedProfilePlan,
+    config: &AppConfig,
+    game_dir: &Path,
+) -> Result<(), String> {
+    let environment = effective_runtime_environment(config);
+    let status = build_special_mod_status(game_dir);
+    let steam_running = read_tasklist_processes()
+        .iter()
+        .any(|process| process.name.eq_ignore_ascii_case("steam.exe"));
+    if !steam_running {
+        return Err(
+            "当前运行环境依赖 Steam/Spacewar 身份，但未检测到 Steam。请先启动 Steam，再重新检查并启动。"
+                .to_string(),
+        );
+    }
+
+    if plan.network_backend == NetworkBackend::ServerRedirector {
+        if environment != RuntimeEnvironment::SteamOfficial {
+            return Err(
+                "Server Redirector 只能在“纯正版 Steam”环境中启动；请切换到干净正版目录并在设置中选择对应环境。"
+                .to_string(),
+            );
+        }
+        if steam_manifest_for_game_dir(game_dir).is_none() {
+            return Err(
+                "MMV Server Redirector 需要可确认的 Steam 正版安装；当前 Game 目录没有匹配的 AppManifest 2622380。"
+                    .to_string(),
+            );
+        }
+        if !status.server_redirector_conflicts.is_empty() {
+            return Err(format!(
+                "当前方案使用 Server Redirector，但游戏目录中检测到会接管 Steam 或 DLL 加载的冲突文件：{}。请改选干净的 Steam 正版 Game 目录。",
+                status.server_redirector_conflicts.join(", ")
+            ));
+        }
+        return Ok(());
+    }
+
+    match environment {
+        RuntimeEnvironment::SteamOfficial => {
+            if steam_manifest_for_game_dir(game_dir).is_none() {
+                return Err(
+                    "未找到与当前 Game 目录匹配的 Steam AppManifest 2622380，不能确认这是正版安装目录。"
+                        .to_string(),
+                );
+            }
+            if !status.server_redirector_conflicts.is_empty() {
+                return Err(format!(
+                    "已选择纯正版 Steam，但目录中存在模拟层/代理文件：{}。",
+                    status.server_redirector_conflicts.join(", ")
+                ));
+            }
+            if plan.network_backend == NetworkBackend::Seamless {
+                return Err(
+                    "检测到 SeamlessCoop，但当前环境选择的是纯正版 Steam；请改选“正版 Steam + Seamless”。"
+                        .to_string(),
+                );
+            }
+            if plan.start_online == Some(true) {
+                return Err(
+                    "作者 Profile 请求连接在线服务器，但当前是普通正版 Mod 方案。为保留 ME3 的官方匹配保护，已阻止启动。"
+                        .to_string(),
+                );
+            }
+            Ok(())
+        }
+        RuntimeEnvironment::SteamSeamless => {
+            if steam_manifest_for_game_dir(game_dir).is_none() {
+                return Err(
+                    "未找到与当前 Game 目录匹配的 Steam AppManifest 2622380，不能确认这是正版 Seamless 安装目录。"
+                        .to_string(),
+                );
+            }
+            if !status.server_redirector_conflicts.is_empty() {
+                return Err(format!(
+                    "正版 Seamless 环境不能包含 OnlineFix/Spacewar 文件：{}。",
+                    status.server_redirector_conflicts.join(", ")
+                ));
+            }
+            if !status.seamless_installed || plan.network_backend != NetworkBackend::Seamless {
+                return Err(
+                    "已选择“正版 Steam + Seamless”，但没有检测到将被加载的 nrsc.dll。".to_string(),
+                );
+            }
+            if plan.start_online == Some(true) {
+                return Err(
+                    "正版 Seamless 方案不应解除 ME3 的官方匹配保护；请移除请求 start_online=true 的冲突 Profile。"
+                        .to_string(),
+                );
+            }
+            Ok(())
+        }
+        RuntimeEnvironment::SpacewarSeamless => {
+            if !status.seamless_installed || !status.onlinefix_installed {
+                return Err(
+                    "Spacewar Seamless 环境缺少完整 SeamlessCoop 或 OnlineFix 文件。".to_string(),
+                );
+            }
+            if plan.network_backend != NetworkBackend::Seamless {
+                return Err(
+                    "Spacewar Seamless 环境必须加载 nrsc.dll；当前生成方案没有 Seamless 后端。"
+                        .to_string(),
+                );
+            }
+            Ok(())
+        }
+        RuntimeEnvironment::Auto | RuntimeEnvironment::UnknownMixed => Err(
+            "无法安全确认运行环境。请在设置中选择纯正版 Steam、正版 Steam + Seamless 或 Spacewar Seamless。"
+                .to_string(),
+        ),
+    }
+}
+
+fn build_launch_args(
+    profile_path: &Path,
+    launch_exe: &Path,
+    network_backend: NetworkBackend,
+    runtime_environment: RuntimeEnvironment,
+) -> Vec<String> {
+    let mut args = vec![
         "launch".to_string(),
         "--exe".to_string(),
         launch_exe.to_string_lossy().to_string(),
-        "--skip-steam-init".to_string(),
-        "--online".to_string(),
+    ];
+    if runtime_environment == RuntimeEnvironment::SpacewarSeamless {
+        args.push("--skip-steam-init".to_string());
+    }
+    if runtime_environment == RuntimeEnvironment::SpacewarSeamless
+        || network_backend == NetworkBackend::ServerRedirector
+    {
+        args.push("--online".to_string());
+    }
+    args.extend([
         "--game".to_string(),
         "nightreign".to_string(),
         "-p".to_string(),
         profile_path.to_string_lossy().to_string(),
-    ]
+    ]);
+    args
 }
 
 fn format_command_line(exe: &Path, args: &[String], working_dir: &Path) -> String {
@@ -1646,6 +2729,166 @@ fn validate_game_dir(game_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn build_runtime_environment_status(config: &AppConfig) -> RuntimeEnvironmentStatus {
+    let game_dir = Path::new(&config.game_path);
+    let seamless = seamless_files_installed(game_dir);
+    let onlinefix_markers = onlinefix_environment_markers(game_dir);
+    let steam_manifest = steam_manifest_for_game_dir(game_dir);
+    let strong_spacewar_marker = onlinefix_markers.iter().any(|file_name| {
+        matches!(
+            file_name.as_str(),
+            "OnlineFix.ini" | "OnlineFix64.dll" | "steam_emu.ini"
+        )
+    });
+    let (detected, confidence) = if strong_spacewar_marker {
+        if seamless {
+            (RuntimeEnvironment::SpacewarSeamless, "high")
+        } else {
+            (RuntimeEnvironment::UnknownMixed, "high")
+        }
+    } else if !onlinefix_markers.is_empty() {
+        (RuntimeEnvironment::UnknownMixed, "medium")
+    } else if steam_manifest.is_some() {
+        if seamless {
+            (RuntimeEnvironment::SteamSeamless, "high")
+        } else {
+            (RuntimeEnvironment::SteamOfficial, "high")
+        }
+    } else if seamless {
+        (RuntimeEnvironment::UnknownMixed, "medium")
+    } else {
+        (RuntimeEnvironment::UnknownMixed, "low")
+    };
+    let effective = if config.runtime_environment == RuntimeEnvironment::Auto {
+        detected
+    } else {
+        config.runtime_environment
+    };
+
+    let mut evidence = Vec::new();
+    if seamless {
+        evidence.push("检测到 SeamlessCoop/nrsc.dll 与设置文件".to_string());
+    } else {
+        evidence.push("未检测到完整 SeamlessCoop".to_string());
+    }
+    if !onlinefix_markers.is_empty() {
+        evidence.push(format!(
+            "检测到 Spacewar/模拟层标记：{}",
+            onlinefix_markers.join(", ")
+        ));
+    }
+    if let Some(manifest) = steam_manifest {
+        evidence.push(format!(
+            "游戏目录与 Steam AppManifest 匹配：{}",
+            manifest.to_string_lossy()
+        ));
+    } else {
+        evidence.push("未确认该目录属于 Steam AppManifest 2622380".to_string());
+    }
+
+    let mut warnings = Vec::new();
+    if detected == RuntimeEnvironment::UnknownMixed {
+        warnings
+            .push("自动检测无法安全确认环境；启动前必须在设置中明确选择并处理冲突。".to_string());
+    }
+    if config.runtime_environment != RuntimeEnvironment::Auto
+        && detected != RuntimeEnvironment::UnknownMixed
+        && config.runtime_environment != detected
+    {
+        warnings.push(format!(
+            "手动选择的环境 {} 与文件检测结果 {} 不一致。",
+            config.runtime_environment.as_str(),
+            detected.as_str()
+        ));
+    }
+    if effective != RuntimeEnvironment::SpacewarSeamless {
+        warnings.push("该环境尚未由当前用户完成真实启动回归，将使用保守参数。".to_string());
+    }
+
+    RuntimeEnvironmentStatus {
+        configured: config.runtime_environment.as_str().to_string(),
+        detected: detected.as_str().to_string(),
+        effective: effective.as_str().to_string(),
+        verified: effective == RuntimeEnvironment::SpacewarSeamless,
+        confidence: confidence.to_string(),
+        evidence,
+        warnings,
+    }
+}
+
+fn effective_runtime_environment(config: &AppConfig) -> RuntimeEnvironment {
+    let status = build_runtime_environment_status(config);
+    runtime_environment_from_str(&status.effective).unwrap_or(RuntimeEnvironment::UnknownMixed)
+}
+
+fn runtime_environment_from_str(value: &str) -> Option<RuntimeEnvironment> {
+    match value {
+        "auto" => Some(RuntimeEnvironment::Auto),
+        "steam_official" => Some(RuntimeEnvironment::SteamOfficial),
+        "steam_seamless" => Some(RuntimeEnvironment::SteamSeamless),
+        "spacewar_seamless" => Some(RuntimeEnvironment::SpacewarSeamless),
+        "unknown_mixed" => Some(RuntimeEnvironment::UnknownMixed),
+        _ => None,
+    }
+}
+
+fn seamless_files_installed(game_dir: &Path) -> bool {
+    game_dir.join("SeamlessCoop").join("nrsc.dll").exists()
+        && game_dir
+            .join("SeamlessCoop")
+            .join("nrsc_settings.ini")
+            .exists()
+}
+
+fn onlinefix_environment_markers(game_dir: &Path) -> Vec<String> {
+    [
+        "OnlineFix.ini",
+        "OnlineFix64.dll",
+        "steam_emu.ini",
+        "dlllist.txt",
+        "winmm.dll",
+    ]
+    .into_iter()
+    .filter(|file_name| game_dir.join(file_name).exists())
+    .map(ToOwned::to_owned)
+    .collect()
+}
+
+fn steam_manifest_for_game_dir(game_dir: &Path) -> Option<PathBuf> {
+    let install_dir = game_dir.parent()?;
+    let common_dir = install_dir.parent()?;
+    if !common_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("common"))
+    {
+        return None;
+    }
+    let steamapps_dir = common_dir.parent()?;
+    if !steamapps_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("steamapps"))
+    {
+        return None;
+    }
+
+    let manifest = steamapps_dir.join("appmanifest_2622380.acf");
+    let content = fs::read_to_string(&manifest).ok()?;
+    let expected_install_dir = install_dir.file_name()?.to_string_lossy();
+    let manifest_install_dir = content.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if !trimmed.to_ascii_lowercase().starts_with("\"installdir\"") {
+            return None;
+        }
+        trimmed.split('"').nth(3).map(str::to_string)
+    })?;
+
+    manifest_install_dir
+        .eq_ignore_ascii_case(&expected_install_dir)
+        .then_some(manifest)
+}
+
 #[allow(dead_code)]
 fn infer_install_root(game_dir: &Path) -> PathBuf {
     game_dir
@@ -1675,18 +2918,17 @@ fn build_special_mod_status(game_dir: &Path) -> SpecialModStatus {
 
     SpecialModStatus {
         game_path: game_dir.to_string_lossy().to_string(),
-        seamless_installed: game_dir.join("SeamlessCoop").join("nrsc.dll").exists()
-            && game_dir
-                .join("SeamlessCoop")
-                .join("nrsc_settings.ini")
-                .exists(),
+        seamless_installed: seamless_files_installed(game_dir),
         onlinefix_installed: onlinefix_required_files()
             .iter()
             .all(|relative_path| game_dir.join(relative_path).exists()),
+        server_redirector_conflicts: server_redirector_conflict_files(game_dir),
         nighter_available: nighter_path.exists(),
         nighter_path: nighter_path.to_string_lossy().to_string(),
         nighter_config_path: nighter_config_path.to_string_lossy().to_string(),
         missing_game_files,
+        latest_patch_backup: latest_patch_backup_dir()
+            .map_or_else(String::new, |path| path.to_string_lossy().to_string()),
     }
 }
 
@@ -1710,6 +2952,144 @@ fn onlinefix_required_files() -> Vec<PathBuf> {
         PathBuf::from("dlllist.txt"),
         PathBuf::from("winmm.dll"),
     ]
+}
+
+fn server_redirector_conflict_files(game_dir: &Path) -> Vec<String> {
+    onlinefix_environment_markers(game_dir)
+}
+
+fn patch_backup_root() -> PathBuf {
+    get_config_dir().join("backups").join("online-patch")
+}
+
+fn latest_patch_backup_dir() -> Option<PathBuf> {
+    let root = patch_backup_root();
+    let mut candidates = fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && path.join("manifest.json").is_file())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.pop()
+}
+
+fn create_patch_backup(game_dir: &Path) -> Result<PathBuf, String> {
+    create_patch_backup_in(game_dir, &patch_backup_root())
+}
+
+fn create_patch_backup_in(game_dir: &Path, backup_root: &Path) -> Result<PathBuf, String> {
+    let backup_dir = backup_root.join(current_timestamp().to_string());
+    let files_dir = backup_dir.join("files");
+    fs::create_dir_all(&files_dir).map_err(|error| {
+        format!(
+            "创建联机补丁备份目录失败：{}，{error}",
+            files_dir.to_string_lossy()
+        )
+    })?;
+
+    let mut files = Vec::new();
+    for relative_path in patch_required_files() {
+        let source = game_dir.join(&relative_path);
+        let existed = source.is_file();
+        if existed {
+            let backup_target = files_dir.join(&relative_path);
+            if let Some(parent) = backup_target.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "创建补丁备份子目录失败：{}，{error}",
+                        parent.to_string_lossy()
+                    )
+                })?;
+            }
+            fs::copy(&source, &backup_target).map_err(|error| {
+                format!(
+                    "备份游戏原文件失败：{} -> {}，{error}",
+                    source.to_string_lossy(),
+                    backup_target.to_string_lossy()
+                )
+            })?;
+        }
+        files.push(PatchBackupFile {
+            relative_path: normalize_relative_path(&relative_path),
+            existed,
+        });
+    }
+
+    let manifest = PatchBackupManifest {
+        game_path: game_dir.to_string_lossy().to_string(),
+        created_at: current_timestamp().to_string(),
+        files,
+    };
+    let content = serde_json::to_string_pretty(&manifest)
+        .map_err(|error| format!("生成补丁备份清单失败：{error}"))?;
+    fs::write(backup_dir.join("manifest.json"), content)
+        .map_err(|error| format!("写入补丁备份清单失败：{error}"))?;
+    Ok(backup_dir)
+}
+
+fn restore_patch_backup(backup_dir: &Path, game_dir: &Path) -> Result<(), String> {
+    let manifest_path = backup_dir.join("manifest.json");
+    let content = fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "读取补丁备份清单失败：{}，{error}",
+            manifest_path.to_string_lossy()
+        )
+    })?;
+    let manifest: PatchBackupManifest =
+        serde_json::from_str(&content).map_err(|error| format!("解析补丁备份清单失败：{error}"))?;
+    if path_key(Path::new(&manifest.game_path)) != path_key(game_dir) {
+        return Err(format!(
+            "备份属于另一个游戏目录：{}。当前目录：{}",
+            manifest.game_path,
+            game_dir.to_string_lossy()
+        ));
+    }
+
+    let allowed = patch_required_files()
+        .into_iter()
+        .map(|path| normalize_relative_path(&path))
+        .collect::<BTreeSet<_>>();
+    for file in manifest.files {
+        if !allowed.contains(&file.relative_path) {
+            return Err(format!(
+                "备份清单包含不受管理的路径，已停止恢复：{}",
+                file.relative_path
+            ));
+        }
+        let relative_path = PathBuf::from(&file.relative_path);
+        if relative_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(format!("备份清单路径不安全：{}", file.relative_path));
+        }
+        let target = game_dir.join(&relative_path);
+        if file.existed {
+            let source = backup_dir.join("files").join(&relative_path);
+            if !source.is_file() {
+                return Err(format!("备份文件缺失：{}", source.to_string_lossy()));
+            }
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|error| format!("创建恢复目录失败：{error}"))?;
+            }
+            fs::copy(&source, &target).map_err(|error| {
+                format!(
+                    "恢复原文件失败：{} -> {}，{error}",
+                    source.to_string_lossy(),
+                    target.to_string_lossy()
+                )
+            })?;
+        } else if target.exists() {
+            fs::remove_file(&target).map_err(|error| {
+                format!(
+                    "移除补丁新增文件失败：{}，{error}",
+                    target.to_string_lossy()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_patch_source(patch_source: &Path) -> Result<(), String> {
@@ -1801,9 +3181,155 @@ fn find_me3_exe(me3_path: &Path) -> Result<PathBuf, String> {
     Err("ME3命令行工具未找到，请选择 ME3 根目录或 bin 目录".to_string())
 }
 
+fn read_me3_version(me3_exe: &Path) -> Option<(u32, u32, u32)> {
+    let output = std::process::Command::new(me3_exe)
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+    let combined = format!(
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    combined.split_whitespace().find_map(parse_semantic_version)
+}
+
+fn parse_semantic_version(value: &str) -> Option<(u32, u32, u32)> {
+    value
+        .split(|character: char| !character.is_ascii_digit() && character != '.')
+        .find_map(|candidate| {
+            let mut parts = candidate.split('.');
+            let major = parts.next()?.parse().ok()?;
+            let minor = parts.next()?.parse().ok()?;
+            let patch = parts.next()?.parse().ok()?;
+            parts.next().is_none().then_some((major, minor, patch))
+        })
+}
+
 fn collect_entries_for_mod(
     mod_dir: &Path,
 ) -> Result<(Vec<PackageEntry>, Vec<NativeEntry>), String> {
+    let (packages, natives, _) = collect_profile_data_for_mod(mod_dir)?;
+    Ok((packages, natives))
+}
+
+fn validate_mmv_seamless_candidate(mod_dir: &Path) -> Result<(), String> {
+    let (packages, natives, metadata) = collect_profile_data_for_mod(mod_dir)?;
+    if metadata.source_paths.is_empty() {
+        return Err("该外部 Mod 没有可读取的作者 .me3 Profile".to_string());
+    }
+    if !natives.iter().any(|entry| {
+        network_backend_for_native_path(&entry.path) == NetworkBackend::ServerRedirector
+    }) {
+        return Err(
+            "只允许对包含 cl_server_redirector.dll 的 MMV 作者 Profile 启用此模式".to_string(),
+        );
+    }
+
+    let regulation_files = collect_regulation_files(&packages);
+    if regulation_files.len() != 1 {
+        return Err(format!(
+            "MMV Seamless 兼容模式要求恰好一个 regulation.bin，当前检测到 {} 个",
+            regulation_files.len()
+        ));
+    }
+
+    Ok(())
+}
+
+fn apply_mmv_seamless_community_override(
+    mod_dir: &Path,
+    packages: &[PackageEntry],
+    natives: &mut Vec<NativeEntry>,
+    metadata: &mut AuthorProfileMetadata,
+    config: &AppConfig,
+) -> Result<(), String> {
+    validate_mmv_seamless_candidate(mod_dir)?;
+
+    let environment = effective_runtime_environment(config);
+    if !matches!(
+        environment,
+        RuntimeEnvironment::SteamSeamless | RuntimeEnvironment::SpacewarSeamless
+    ) {
+        return Err(
+            "MMV Seamless 社区兼容模式只允许用于 Steam + Seamless 或 Spacewar + Seamless 环境"
+                .to_string(),
+        );
+    }
+
+    let before = natives.len();
+    natives.retain(|entry| {
+        network_backend_for_native_path(&entry.path) != NetworkBackend::ServerRedirector
+    });
+    if natives.len() == before {
+        return Err("未能从生成副本中移除 Server Redirector".to_string());
+    }
+
+    let nrsc = Path::new(&config.game_path)
+        .join("SeamlessCoop")
+        .join("nrsc.dll");
+    if !nrsc.is_file() {
+        return Err(format!(
+            "MMV Seamless 社区兼容模式需要游戏目录中的 {}",
+            nrsc.to_string_lossy()
+        ));
+    }
+
+    if collect_regulation_files(packages).len() != 1 {
+        return Err("MMV Seamless 社区兼容模式要求单一 regulation.bin 所有者".to_string());
+    }
+
+    metadata
+        .root_fields
+        .insert("start_online".to_string(), toml::Value::Boolean(true));
+    Ok(())
+}
+
+fn collect_regulation_files(packages: &[PackageEntry]) -> Vec<PathBuf> {
+    packages
+        .iter()
+        .filter_map(|entry| {
+            let regulation = entry.path.join("regulation.bin");
+            regulation.is_file().then_some(regulation)
+        })
+        .collect()
+}
+
+fn collect_zhocn_packages(packages: &[PackageEntry]) -> Vec<PathBuf> {
+    packages
+        .iter()
+        .filter(|entry| is_complete_zhocn_package(&entry.path))
+        .map(|entry| entry.path.clone())
+        .collect()
+}
+
+fn is_complete_zhocn_package(package_root: &Path) -> bool {
+    let root = package_root.join("msg").join("zhocn");
+    root.join("item_dlc01.msgbnd.dcx").is_file() && root.join("menu_dlc01.msgbnd.dcx").is_file()
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path)
+        .map_err(|error| format!("读取哈希文件失败 {}：{error}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("计算哈希失败 {}：{error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:X}", hasher.finalize()))
+}
+
+fn collect_profile_data_for_mod(
+    mod_dir: &Path,
+) -> Result<(Vec<PackageEntry>, Vec<NativeEntry>, AuthorProfileMetadata), String> {
     if mod_dir.is_file() {
         if mod_dir
             .extension()
@@ -1816,21 +3342,27 @@ fn collect_entries_for_mod(
                 vec![NativeEntry {
                     path: normalize_windows_path_buf(resolved),
                     load_early: false,
+                    fields: default_native_fields(false),
                 }],
+                AuthorProfileMetadata::default(),
             ));
         }
 
-        return Ok((Vec::new(), Vec::new()));
+        return Ok((Vec::new(), Vec::new(), AuthorProfileMetadata::default()));
     }
 
     let mut packages = Vec::new();
     let mut natives = Vec::new();
+    let mut metadata = AuthorProfileMetadata::default();
 
     for me3_file in find_top_level_me3_files(mod_dir) {
         let content = fs::read_to_string(&me3_file).map_err(|e| e.to_string())?;
-        let (mut mod_packages, mut mod_natives) = parse_me3_entries(mod_dir, &content)?;
+        let (mut mod_packages, mut mod_natives, mut mod_metadata) =
+            parse_me3_document(mod_dir, &content)?;
+        mod_metadata.source_paths.push(me3_file);
         packages.append(&mut mod_packages);
         natives.append(&mut mod_natives);
+        merge_author_profile_metadata(&mut metadata, mod_metadata)?;
     }
 
     if packages.is_empty() && natives.is_empty() {
@@ -1839,18 +3371,47 @@ fn collect_entries_for_mod(
         natives.append(&mut inferred_natives);
     }
 
-    Ok((packages, natives))
+    Ok((packages, natives, metadata))
 }
 
+#[cfg(test)]
 fn parse_me3_entries(
     mod_dir: &Path,
     content: &str,
 ) -> Result<(Vec<PackageEntry>, Vec<NativeEntry>), String> {
+    let (packages, natives, _) = parse_me3_document(mod_dir, content)?;
+    Ok((packages, natives))
+}
+
+fn parse_me3_document(
+    mod_dir: &Path,
+    content: &str,
+) -> Result<(Vec<PackageEntry>, Vec<NativeEntry>, AuthorProfileMetadata), String> {
     let value: toml::Value = content
         .parse()
         .map_err(|e: toml::de::Error| e.to_string())?;
+    let table = value
+        .as_table()
+        .ok_or_else(|| "ME3 profile 根节点必须是 TOML 表".to_string())?;
     let mut packages = Vec::new();
     let mut natives = Vec::new();
+    let mut root_fields = table.clone();
+    for key in ["packages", "package", "natives"] {
+        root_fields.remove(key);
+    }
+    if let Some(supports) = root_fields
+        .get_mut("supports")
+        .and_then(toml::Value::as_array_mut)
+    {
+        for support in supports {
+            if let Some(fields) = support.as_table_mut() {
+                fields.insert(
+                    "game".to_string(),
+                    toml::Value::String("nightreign".to_string()),
+                );
+            }
+        }
+    }
 
     for key in ["packages", "package"] {
         if let Some(entries) = value.get(key).and_then(|v| v.as_array()) {
@@ -1858,7 +3419,17 @@ fn parse_me3_entries(
                 if let Some(path) = entry.get("path").and_then(|v| v.as_str()) {
                     let resolved = resolve_mod_path(mod_dir, path);
                     if resolved.exists() {
-                        packages.push(PackageEntry { path: resolved });
+                        let mut fields = entry.as_table().cloned().unwrap_or_default();
+                        fields.insert(
+                            "path".to_string(),
+                            toml::Value::String(normalize_windows_path_string(
+                                &resolved.to_string_lossy(),
+                            )),
+                        );
+                        packages.push(PackageEntry {
+                            path: resolved,
+                            fields,
+                        });
                     }
                 }
             }
@@ -1870,19 +3441,35 @@ fn parse_me3_entries(
             if let Some(path) = entry.get("path").and_then(|v| v.as_str()) {
                 let resolved = resolve_mod_path(mod_dir, path);
                 if resolved.exists() {
+                    let mut fields = entry.as_table().cloned().unwrap_or_default();
+                    fields.insert(
+                        "path".to_string(),
+                        toml::Value::String(normalize_windows_path_string(
+                            &resolved.to_string_lossy(),
+                        )),
+                    );
+                    let load_early = entry
+                        .get("load_early")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     natives.push(NativeEntry {
                         path: resolved,
-                        load_early: entry
-                            .get("load_early")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
+                        load_early,
+                        fields,
                     });
                 }
             }
         }
     }
 
-    Ok((packages, natives))
+    Ok((
+        packages,
+        natives,
+        AuthorProfileMetadata {
+            root_fields,
+            source_paths: Vec::new(),
+        },
+    ))
 }
 
 fn infer_entries_for_mod(mod_dir: &Path) -> (Vec<PackageEntry>, Vec<NativeEntry>) {
@@ -1892,15 +3479,20 @@ fn infer_entries_for_mod(mod_dir: &Path) -> (Vec<PackageEntry>, Vec<NativeEntry>
         .map(|path| NativeEntry {
             path,
             load_early: false,
+            fields: default_native_fields(false),
         })
         .collect();
 
     let mod_subdir = mod_dir.join("mod");
     if mod_subdir.is_dir() {
-        packages.push(PackageEntry { path: mod_subdir });
+        packages.push(PackageEntry {
+            path: mod_subdir,
+            fields: default_package_fields(),
+        });
     } else if has_package_like_content(mod_dir) {
         packages.push(PackageEntry {
             path: mod_dir.to_path_buf(),
+            fields: default_package_fields(),
         });
     }
 
@@ -1919,6 +3511,7 @@ fn infer_game_root_natives(game_dir: &Path) -> Vec<NativeEntry> {
         natives.push(NativeEntry {
             path: normalize_windows_path_buf(nrsc),
             load_early: true,
+            fields: default_native_fields(true),
         });
     }
 
@@ -1932,6 +3525,7 @@ fn infer_game_root_natives(game_dir: &Path) -> Vec<NativeEntry> {
         natives.push(NativeEntry {
             path: normalize_windows_path_buf(nighter),
             load_early: false,
+            fields: default_native_fields(false),
         });
     }
 
@@ -1949,34 +3543,150 @@ fn resolve_mod_path(mod_dir: &Path, entry_path: &str) -> PathBuf {
     normalize_windows_path_buf(fs::canonicalize(&resolved).unwrap_or(resolved))
 }
 
-fn build_me3_profile(packages: &[PackageEntry], natives: &[NativeEntry]) -> String {
-    let mut content =
-        String::from("profileVersion = \"v1\"\n\n[[supports]]\ngame = \"nightreign\"\n");
+fn build_me3_profile(
+    metadata: &AuthorProfileMetadata,
+    packages: &[PackageEntry],
+    natives: &[NativeEntry],
+) -> Result<String, String> {
+    let mut root = metadata.root_fields.clone();
+    root.entry("profileVersion".to_string())
+        .or_insert_with(|| toml::Value::String("v1".to_string()));
 
-    for native in natives {
-        content.push_str("\n[[natives]]\n");
-        content.push_str(&format!("path = {}\n", toml_string(&native.path)));
-        content.push_str("optional = false\n");
-        content.push_str("enabled = true\n");
-        content.push_str("load_before = []\n");
-        content.push_str("load_after = []\n");
-        content.push_str(&format!("load_early = {}\n", native.load_early));
+    let mut supports = root
+        .remove("supports")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    if supports.is_empty() {
+        supports.push(toml::Value::Table(toml::Table::new()));
     }
-
-    for package in packages {
-        content.push_str("\n[[packages]]\n");
-        content.push_str("enabled = true\n");
-        content.push_str(&format!("path = {}\n", toml_string(&package.path)));
-        content.push_str("load_after = []\n");
-        content.push_str("load_before = []\n");
+    for support in &mut supports {
+        if let Some(fields) = support.as_table_mut() {
+            fields.insert(
+                "game".to_string(),
+                toml::Value::String("nightreign".to_string()),
+            );
+        }
     }
+    root.insert("supports".to_string(), toml::Value::Array(supports));
+    root.insert(
+        "natives".to_string(),
+        toml::Value::Array(
+            natives
+                .iter()
+                .map(|native| {
+                    let mut fields = native.fields.clone();
+                    fields.insert(
+                        "path".to_string(),
+                        toml::Value::String(normalize_windows_path_string(
+                            &native.path.to_string_lossy(),
+                        )),
+                    );
+                    fields.insert(
+                        "load_early".to_string(),
+                        toml::Value::Boolean(native.load_early),
+                    );
+                    toml::Value::Table(fields)
+                })
+                .collect(),
+        ),
+    );
+    root.insert(
+        "packages".to_string(),
+        toml::Value::Array(
+            packages
+                .iter()
+                .map(|package| {
+                    let mut fields = package.fields.clone();
+                    fields.insert(
+                        "path".to_string(),
+                        toml::Value::String(normalize_windows_path_string(
+                            &package.path.to_string_lossy(),
+                        )),
+                    );
+                    toml::Value::Table(fields)
+                })
+                .collect(),
+        ),
+    );
 
-    content
+    toml::to_string_pretty(&root).map_err(|error| format!("生成 ME3 profile 失败：{error}"))
 }
 
-fn toml_string(path: &Path) -> String {
-    let value = normalize_windows_path_string(&path.to_string_lossy());
-    serde_json::to_string(&value).unwrap_or_else(|_| "\"\"".to_string())
+fn default_package_fields() -> toml::Table {
+    let mut fields = toml::Table::new();
+    fields.insert("enabled".to_string(), toml::Value::Boolean(true));
+    fields.insert("load_after".to_string(), toml::Value::Array(Vec::new()));
+    fields.insert("load_before".to_string(), toml::Value::Array(Vec::new()));
+    fields
+}
+
+fn default_native_fields(load_early: bool) -> toml::Table {
+    let mut fields = default_package_fields();
+    fields.insert("optional".to_string(), toml::Value::Boolean(false));
+    fields.insert("load_early".to_string(), toml::Value::Boolean(load_early));
+    fields
+}
+
+fn merge_author_profile_metadata(
+    target: &mut AuthorProfileMetadata,
+    incoming: AuthorProfileMetadata,
+) -> Result<(), String> {
+    for (key, value) in incoming.root_fields {
+        if let Some(existing) = target.root_fields.get(&key) {
+            if existing != &value {
+                return Err(format!(
+                    "多个作者 Profile 的根字段冲突：{key}。请只启用一个需要独立启动语义的整合包。"
+                ));
+            }
+            continue;
+        }
+        target.root_fields.insert(key, value);
+    }
+    target.source_paths.extend(incoming.source_paths);
+    Ok(())
+}
+
+fn network_backend_for_native_path(path: &Path) -> NetworkBackend {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if file_name.eq_ignore_ascii_case("cl_server_redirector.dll") {
+        NetworkBackend::ServerRedirector
+    } else if file_name.eq_ignore_ascii_case("nrsc.dll") {
+        NetworkBackend::Seamless
+    } else {
+        NetworkBackend::None
+    }
+}
+
+fn detect_network_backend(natives: &[NativeEntry]) -> Result<NetworkBackend, String> {
+    let has_server_redirector = natives.iter().any(|entry| {
+        network_backend_for_native_path(&entry.path) == NetworkBackend::ServerRedirector
+    });
+    let has_seamless = natives
+        .iter()
+        .any(|entry| network_backend_for_native_path(&entry.path) == NetworkBackend::Seamless);
+    let has_nighter = natives.iter().any(|entry| {
+        entry
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("nighter.dll"))
+    });
+
+    if has_server_redirector && (has_seamless || has_nighter) {
+        Err(
+            "检测到 Server Redirector 与 SeamlessCoop/nighter 同时启用。MMV 方案只能使用 Server Redirector，请停用单独注册的 nrsc.dll 或 nighter.dll。"
+                .to_string(),
+        )
+    } else if has_server_redirector {
+        Ok(NetworkBackend::ServerRedirector)
+    } else if has_seamless {
+        Ok(NetworkBackend::Seamless)
+    } else {
+        Ok(NetworkBackend::None)
+    }
 }
 
 fn has_dll_file(path: &Path) -> bool {
@@ -2344,20 +4054,50 @@ fn current_timestamp() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zip::write::FileOptions;
+
+    fn create_test_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = File::create(path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, content) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(content).unwrap();
+        }
+        writer.finish().unwrap();
+    }
 
     #[test]
     fn infers_package_for_parts_only_mod() {
         let mod_dir = PathBuf::from(r"D:\Game\mods\duchessunmask");
         let packages = vec![PackageEntry {
             path: mod_dir.clone(),
+            fields: default_package_fields(),
         }];
         let natives = Vec::new();
 
-        let profile = build_me3_profile(&packages, &natives);
+        let profile =
+            build_me3_profile(&AuthorProfileMetadata::default(), &packages, &natives).unwrap();
+        let value = profile.parse::<toml::Value>().unwrap();
 
-        assert!(profile.contains("[[packages]]"));
-        assert!(profile.contains("game = \"nightreign\""));
-        assert!(profile.contains(r"D:\\Game\\mods\\duchessunmask"));
+        assert_eq!(
+            value
+                .get("supports")
+                .and_then(toml::Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|entry| entry.get("game"))
+                .and_then(toml::Value::as_str),
+            Some("nightreign")
+        );
+        assert_eq!(
+            value
+                .get("packages")
+                .and_then(toml::Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|entry| entry.get("path"))
+                .and_then(toml::Value::as_str),
+            Some(r"D:\Game\mods\duchessunmask")
+        );
     }
 
     #[test]
@@ -2365,35 +4105,61 @@ mod tests {
         let packages = vec![
             PackageEntry {
                 path: PathBuf::from(r"D:\Game\mods\z_last"),
+                fields: default_package_fields(),
             },
             PackageEntry {
                 path: PathBuf::from(r"D:\Game\mods\a_first"),
+                fields: default_package_fields(),
             },
         ];
         let natives = Vec::new();
 
-        let profile = build_me3_profile(&packages, &natives);
-        let z_index = profile.find(r"D:\\Game\\mods\\z_last").unwrap();
-        let a_index = profile.find(r"D:\\Game\\mods\\a_first").unwrap();
+        let profile =
+            build_me3_profile(&AuthorProfileMetadata::default(), &packages, &natives).unwrap();
+        let value = profile.parse::<toml::Value>().unwrap();
+        let paths = value
+            .get("packages")
+            .and_then(toml::Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry.get("path").and_then(toml::Value::as_str))
+            .collect::<Vec<_>>();
 
-        assert!(z_index < a_index);
+        assert_eq!(paths, vec![r"D:\Game\mods\z_last", r"D:\Game\mods\a_first"]);
     }
 
     #[test]
     fn build_profile_strips_windows_verbatim_prefix() {
         let packages = vec![PackageEntry {
             path: PathBuf::from(r"\\?\D:\Game\mods\duchessunmask"),
+            fields: default_package_fields(),
         }];
         let natives = vec![NativeEntry {
             path: PathBuf::from(r"\\?\D:\Game\mods\nighter.dll"),
             load_early: false,
+            fields: default_native_fields(false),
         }];
 
-        let profile = build_me3_profile(&packages, &natives);
+        let profile =
+            build_me3_profile(&AuthorProfileMetadata::default(), &packages, &natives).unwrap();
+        let value = profile.parse::<toml::Value>().unwrap();
+        let package_path = value
+            .get("packages")
+            .and_then(toml::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|entry| entry.get("path"))
+            .and_then(toml::Value::as_str)
+            .unwrap();
+        let native_path = value
+            .get("natives")
+            .and_then(toml::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|entry| entry.get("path"))
+            .and_then(toml::Value::as_str)
+            .unwrap();
 
-        assert!(!profile.contains(r"\\?\\"));
-        assert!(profile.contains(r"D:\\Game\\mods\\duchessunmask"));
-        assert!(profile.contains(r"D:\\Game\\mods\\nighter.dll"));
+        assert_eq!(package_path, r"D:\Game\mods\duchessunmask");
+        assert_eq!(native_path, r"D:\Game\mods\nighter.dll");
     }
 
     #[test]
@@ -2408,10 +4174,12 @@ mod tests {
                 NativeEntry {
                     path: PathBuf::from(r"\\?\D:\Game\mods\nighter.dll"),
                     load_early: false,
+                    fields: default_native_fields(false),
                 },
                 NativeEntry {
                     path: PathBuf::from(r"D:\Game\mods\nighter.dll"),
                     load_early: false,
+                    fields: default_native_fields(false),
                 },
             ],
         );
@@ -2445,6 +4213,745 @@ load_early = true
 
         assert_eq!(packages.len(), 1);
         assert!(natives.is_empty());
+    }
+
+    #[test]
+    fn zip_installer_preserves_game_semantic_roots() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_semantic_zip_test_{}",
+            current_timestamp()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        let message_zip = root.join("message.zip");
+        create_test_zip(
+            &message_zip,
+            &[
+                ("msg/zhocn/item_dlc01.msgbnd.dcx", b"item"),
+                ("msg/zhocn/menu_dlc01.msgbnd.dcx", b"menu"),
+            ],
+        );
+        let mut message_archive = ZipArchive::new(File::open(&message_zip).unwrap()).unwrap();
+        assert_eq!(detect_single_zip_root(&mut message_archive).unwrap(), None);
+        drop(message_archive);
+        let message_output = root.join("message-output");
+        fs::create_dir_all(&message_output).unwrap();
+        extract_zip(&message_zip, &message_output).unwrap();
+        assert!(message_output
+            .join("msg")
+            .join("zhocn")
+            .join("item_dlc01.msgbnd.dcx")
+            .is_file());
+
+        let parts_zip = root.join("parts.zip");
+        create_test_zip(&parts_zip, &[("parts/example.partsbnd.dcx", b"parts")]);
+        let mut parts_archive = ZipArchive::new(File::open(&parts_zip).unwrap()).unwrap();
+        assert_eq!(detect_single_zip_root(&mut parts_archive).unwrap(), None);
+
+        let regulation_zip = root.join("regulation.zip");
+        create_test_zip(&regulation_zip, &[("regulation.bin", b"regulation")]);
+        let mut regulation_archive = ZipArchive::new(File::open(&regulation_zip).unwrap()).unwrap();
+        assert_eq!(
+            detect_single_zip_root(&mut regulation_archive).unwrap(),
+            None
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn zip_installer_only_strips_a_real_wrapper_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_wrapper_zip_test_{}",
+            current_timestamp()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let archive_path = root.join("wrapped.zip");
+        create_test_zip(
+            &archive_path,
+            &[
+                ("zhocn-2.1.7.1/msg/zhocn/item_dlc01.msgbnd.dcx", b"item"),
+                ("zhocn-2.1.7.1/msg/zhocn/menu_dlc01.msgbnd.dcx", b"menu"),
+            ],
+        );
+        let mut archive = ZipArchive::new(File::open(&archive_path).unwrap()).unwrap();
+
+        let wrapper = detect_single_zip_root(&mut archive).unwrap();
+
+        assert_eq!(wrapper, Some(PathBuf::from("zhocn-2.1.7.1")));
+        drop(archive);
+        let output = root.join("output");
+        fs::create_dir_all(&output).unwrap();
+        extract_zip(&archive_path, &output).unwrap();
+        assert!(output
+            .join("msg")
+            .join("zhocn")
+            .join("menu_dlc01.msgbnd.dcx")
+            .is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn normalizes_flat_zhocn_archive_layout() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_flat_zhocn_test_{}",
+            current_timestamp()
+        ));
+        let source = root.join("zhocn");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("item_dlc01.msgbnd.dcx"), b"item").unwrap();
+        fs::write(source.join("menu_dlc01.msgbnd.dcx"), b"menu").unwrap();
+
+        assert!(normalize_zhocn_layout(&root).unwrap());
+        assert!(root
+            .join("msg")
+            .join("zhocn")
+            .join("item_dlc01.msgbnd.dcx")
+            .is_file());
+        assert!(!source.join("item_dlc01.msgbnd.dcx").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn normalizes_root_level_zhocn_files() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_root_zhocn_test_{}",
+            current_timestamp()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("item_dlc01.msgbnd.dcx"), b"item").unwrap();
+        fs::write(root.join("menu_dlc01.msgbnd.dcx"), b"menu").unwrap();
+
+        assert!(normalize_zhocn_layout(&root).unwrap());
+        assert!(root
+            .join("msg")
+            .join("zhocn")
+            .join("menu_dlc01.msgbnd.dcx")
+            .is_file());
+        assert!(!root.join("menu_dlc01.msgbnd.dcx").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_ambiguous_zhocn_archive_layouts() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_ambiguous_zhocn_test_{}",
+            current_timestamp()
+        ));
+        let canonical = root.join("msg").join("zhocn");
+        let flat = root.join("zhocn");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::create_dir_all(&flat).unwrap();
+        fs::write(canonical.join("item_dlc01.msgbnd.dcx"), b"item").unwrap();
+        fs::write(flat.join("item_dlc01.msgbnd.dcx"), b"item").unwrap();
+        fs::write(flat.join("menu_dlc01.msgbnd.dcx"), b"menu").unwrap();
+
+        let error = normalize_zhocn_layout(&root).unwrap_err();
+
+        assert!(error.contains("多套或不完整"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mmv_profile_preserves_launch_semantics_and_normalizes_game_id() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_mmv_test_{}",
+            current_timestamp()
+        ));
+        let mod_dir = root.join("MMV");
+        let package_dir = mod_dir.join("mod");
+        let redirector = package_dir
+            .join("Server Redirector")
+            .join("cl_server_redirector.dll");
+        fs::create_dir_all(redirector.parent().unwrap()).unwrap();
+        fs::write(&redirector, b"test").unwrap();
+
+        let content = r#"
+profileVersion = "v1"
+savefile = "NR0000.co2"
+start_online = true
+future_option = "preserve-me"
+
+[[supports]]
+game = "nightrein"
+future_support_option = true
+
+[[packages]]
+path = "mod"
+source = "mmv-package"
+
+[[natives]]
+path = "mod/Server Redirector/cl_server_redirector.dll"
+load_early = true
+source = "mmv-native"
+"#;
+
+        let (packages, natives, metadata) = parse_me3_document(&mod_dir, content).unwrap();
+        let generated = build_me3_profile(&metadata, &packages, &natives).unwrap();
+        let value = generated.parse::<toml::Value>().unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(
+            value.get("savefile").and_then(toml::Value::as_str),
+            Some("NR0000.co2")
+        );
+        assert_eq!(
+            value.get("start_online").and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.get("future_option").and_then(toml::Value::as_str),
+            Some("preserve-me")
+        );
+        let support = value
+            .get("supports")
+            .and_then(toml::Value::as_array)
+            .and_then(|items| items.first())
+            .unwrap();
+        assert_eq!(
+            support.get("game").and_then(toml::Value::as_str),
+            Some("nightreign")
+        );
+        assert_eq!(
+            support
+                .get("future_support_option")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("packages")
+                .and_then(toml::Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|entry| entry.get("source"))
+                .and_then(toml::Value::as_str),
+            Some("mmv-package")
+        );
+        assert_eq!(
+            value
+                .get("natives")
+                .and_then(toml::Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|entry| entry.get("source"))
+                .and_then(toml::Value::as_str),
+            Some("mmv-native")
+        );
+        assert_eq!(
+            detect_network_backend(&natives).unwrap(),
+            NetworkBackend::ServerRedirector
+        );
+    }
+
+    #[test]
+    fn mmv_community_override_only_changes_generated_profile_data() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_mmv_seamless_test_{}",
+            current_timestamp()
+        ));
+        let mod_dir = root.join("MMV");
+        let package_dir = mod_dir.join("mod");
+        let redirector = package_dir
+            .join("Server Redirector")
+            .join("cl_server_redirector.dll");
+        let game_dir = root.join("Game");
+        let nrsc = game_dir.join("SeamlessCoop").join("nrsc.dll");
+        fs::create_dir_all(redirector.parent().unwrap()).unwrap();
+        fs::create_dir_all(nrsc.parent().unwrap()).unwrap();
+        fs::write(&redirector, b"author redirector").unwrap();
+        fs::write(package_dir.join("regulation.bin"), b"merged regulation").unwrap();
+        fs::write(&nrsc, b"seamless").unwrap();
+
+        let author_profile = r#"
+profileVersion = "v1"
+savefile = "NR0000.co2"
+start_online = true
+
+[[supports]]
+game = "nightrein"
+
+[[packages]]
+path = "mod"
+
+[[natives]]
+path = "mod/Server Redirector/cl_server_redirector.dll"
+load_early = true
+"#;
+        let profile_path = mod_dir.join("MMV.me3");
+        fs::write(&profile_path, author_profile).unwrap();
+
+        let (packages, mut natives, mut metadata) = collect_profile_data_for_mod(&mod_dir).unwrap();
+        let config = AppConfig {
+            game_path: game_dir.to_string_lossy().to_string(),
+            me3_path: String::new(),
+            launch_exe_path: String::new(),
+            runtime_environment: RuntimeEnvironment::SpacewarSeamless,
+        };
+
+        apply_mmv_seamless_community_override(
+            &mod_dir,
+            &packages,
+            &mut natives,
+            &mut metadata,
+            &config,
+        )
+        .unwrap();
+        let mut seen = BTreeSet::new();
+        extend_unique_natives(&mut natives, &mut seen, infer_game_root_natives(&game_dir));
+        let generated = build_me3_profile(&metadata, &packages, &natives).unwrap();
+
+        assert_eq!(
+            detect_network_backend(&natives).unwrap(),
+            NetworkBackend::Seamless
+        );
+        assert!(generated.contains("nrsc.dll"));
+        assert!(!generated.contains("cl_server_redirector.dll"));
+        assert_eq!(fs::read_to_string(&profile_path).unwrap(), author_profile);
+        assert_eq!(fs::read(&redirector).unwrap(), b"author redirector");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mmv_community_candidate_requires_one_regulation_owner() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_regulation_owner_test_{}",
+            current_timestamp()
+        ));
+        let mod_dir = root.join("MMV");
+        for package_name in ["map", "weapons"] {
+            let package = mod_dir.join(package_name);
+            fs::create_dir_all(&package).unwrap();
+            fs::write(package.join("regulation.bin"), package_name.as_bytes()).unwrap();
+        }
+        let redirector = mod_dir
+            .join("map")
+            .join("Server Redirector")
+            .join("cl_server_redirector.dll");
+        fs::create_dir_all(redirector.parent().unwrap()).unwrap();
+        fs::write(&redirector, b"redirector").unwrap();
+        fs::write(
+            mod_dir.join("MMV.me3"),
+            r#"
+profileVersion = "v1"
+[[supports]]
+game = "nightreign"
+[[packages]]
+path = "map"
+[[packages]]
+path = "weapons"
+[[natives]]
+path = "map/Server Redirector/cl_server_redirector.dll"
+"#,
+        )
+        .unwrap();
+
+        let error = validate_mmv_seamless_candidate(&mod_dir).unwrap_err();
+
+        assert!(error.contains("恰好一个 regulation.bin"));
+        assert!(error.contains('2'));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn detects_only_complete_zhocn_package_layouts() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_zhocn_test_{}",
+            current_timestamp()
+        ));
+        let complete = root.join("complete");
+        let incomplete = root.join("incomplete");
+        let legacy = root.join("legacy");
+        let zhocn = complete.join("msg").join("zhocn");
+        fs::create_dir_all(&zhocn).unwrap();
+        fs::create_dir_all(incomplete.join("msg").join("zhocn")).unwrap();
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(zhocn.join("item_dlc01.msgbnd.dcx"), b"item").unwrap();
+        fs::write(zhocn.join("menu_dlc01.msgbnd.dcx"), b"menu").unwrap();
+        fs::write(
+            incomplete
+                .join("msg")
+                .join("zhocn")
+                .join("item_dlc01.msgbnd.dcx"),
+            b"item",
+        )
+        .unwrap();
+        fs::write(legacy.join("item_dlc01.msgbnd.dcx"), b"legacy item").unwrap();
+        fs::write(legacy.join("menu_dlc01.msgbnd.dcx"), b"legacy menu").unwrap();
+        let packages = [&complete, &incomplete, &legacy]
+            .into_iter()
+            .map(|path| PackageEntry {
+                path: path.to_path_buf(),
+                fields: default_package_fields(),
+            })
+            .collect::<Vec<_>>();
+
+        let detected = collect_zhocn_packages(&packages);
+
+        assert_eq!(detected, vec![complete]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sha256_file_returns_stable_uppercase_fingerprint() {
+        let path = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_sha256_test_{}",
+            current_timestamp()
+        ));
+        fs::write(&path, b"abc").unwrap();
+
+        let fingerprint = sha256_file(&path).unwrap();
+
+        assert_eq!(
+            fingerprint,
+            "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_server_redirector_and_seamless_in_same_profile() {
+        let natives = vec![
+            NativeEntry {
+                path: PathBuf::from(r"D:\Mods\MMV\cl_server_redirector.dll"),
+                load_early: true,
+                fields: default_native_fields(true),
+            },
+            NativeEntry {
+                path: PathBuf::from(r"D:\Game\SeamlessCoop\nrsc.dll"),
+                load_early: true,
+                fields: default_native_fields(true),
+            },
+        ];
+
+        let error = detect_network_backend(&natives).unwrap_err();
+
+        assert!(error.contains("Server Redirector"));
+        assert!(error.contains("SeamlessCoop"));
+    }
+
+    #[test]
+    fn server_redirector_launch_keeps_steam_initialization() {
+        let args = build_launch_args(
+            Path::new(r"C:\Profiles\active-nightreign.me3"),
+            Path::new(r"D:\Steam\Nightreign\Game\nightreign.exe"),
+            NetworkBackend::ServerRedirector,
+            RuntimeEnvironment::SteamOfficial,
+        );
+
+        assert!(!args.iter().any(|arg| arg == "--skip-steam-init"));
+        assert!(args.iter().any(|arg| arg == "--online"));
+    }
+
+    #[test]
+    fn seamless_launch_preserves_spacewar_steam_bypass() {
+        let args = build_launch_args(
+            Path::new(r"C:\Profiles\active-nightreign.me3"),
+            Path::new(r"D:\Game\Nightreign\Game\nightreign.exe"),
+            NetworkBackend::Seamless,
+            RuntimeEnvironment::SpacewarSeamless,
+        );
+
+        assert!(args.iter().any(|arg| arg == "--skip-steam-init"));
+        assert!(args.iter().any(|arg| arg == "--online"));
+    }
+
+    #[test]
+    fn official_launch_modes_keep_me3_matchmaking_protection() {
+        for (backend, environment) in [
+            (NetworkBackend::None, RuntimeEnvironment::SteamOfficial),
+            (NetworkBackend::Seamless, RuntimeEnvironment::SteamSeamless),
+        ] {
+            let args = build_launch_args(
+                Path::new(r"C:\Profiles\active-nightreign.me3"),
+                Path::new(r"D:\Steam\Nightreign\Game\nightreign.exe"),
+                backend,
+                environment,
+            );
+            assert!(!args.iter().any(|arg| arg == "--skip-steam-init"));
+            assert!(!args.iter().any(|arg| arg == "--online"));
+        }
+    }
+
+    #[test]
+    fn nighter_alone_is_not_a_seamless_backend() {
+        let natives = vec![NativeEntry {
+            path: PathBuf::from(r"D:\Game\mods\nighter.dll"),
+            load_early: false,
+            fields: default_native_fields(false),
+        }];
+
+        assert_eq!(
+            detect_network_backend(&natives).unwrap(),
+            NetworkBackend::None
+        );
+    }
+
+    #[test]
+    fn official_mods_get_an_isolated_savefile_by_default() {
+        let mut metadata = AuthorProfileMetadata::default();
+        apply_safe_default_savefile(
+            &mut metadata,
+            RuntimeEnvironment::SteamOfficial,
+            NetworkBackend::None,
+            1,
+        );
+
+        assert_eq!(
+            metadata
+                .root_fields
+                .get("savefile")
+                .and_then(toml::Value::as_str),
+            Some(OFFICIAL_MOD_SAVEFILE)
+        );
+    }
+
+    #[test]
+    fn patch_backup_restores_overwritten_and_removes_new_files() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_patch_backup_test_{}",
+            current_timestamp()
+        ));
+        let game_dir = root.join("Game");
+        let backup_root = root.join("backups");
+        fs::create_dir_all(game_dir.join("SeamlessCoop")).unwrap();
+        fs::write(game_dir.join("steam_api64.dll"), b"original").unwrap();
+
+        let backup_dir = create_patch_backup_in(&game_dir, &backup_root).unwrap();
+        fs::write(game_dir.join("steam_api64.dll"), b"patched").unwrap();
+        fs::write(game_dir.join("OnlineFix64.dll"), b"new").unwrap();
+
+        restore_patch_backup(&backup_dir, &game_dir).unwrap();
+
+        assert_eq!(
+            fs::read(game_dir.join("steam_api64.dll")).unwrap(),
+            b"original"
+        );
+        assert!(!game_dir.join("OnlineFix64.dll").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_me3_semantic_version() {
+        assert_eq!(parse_semantic_version("me3-v0.12.1"), Some((0, 12, 1)));
+        assert_eq!(parse_semantic_version("not-a-version"), None);
+    }
+
+    #[test]
+    fn detects_spacewar_only_with_strong_marker_and_seamless() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_spacewar_detection_test_{}",
+            current_timestamp()
+        ));
+        let game_dir = root.join("Game");
+        fs::create_dir_all(game_dir.join("SeamlessCoop")).unwrap();
+        fs::write(game_dir.join("SeamlessCoop").join("nrsc.dll"), b"dll").unwrap();
+        fs::write(
+            game_dir.join("SeamlessCoop").join("nrsc_settings.ini"),
+            b"save_file_extension = co2",
+        )
+        .unwrap();
+        fs::write(game_dir.join("OnlineFix64.dll"), b"dll").unwrap();
+        let config = AppConfig {
+            game_path: game_dir.to_string_lossy().to_string(),
+            me3_path: String::new(),
+            launch_exe_path: String::new(),
+            runtime_environment: RuntimeEnvironment::Auto,
+        };
+
+        let status = build_runtime_environment_status(&config);
+
+        assert_eq!(status.detected, "spacewar_seamless");
+        assert_eq!(status.effective, "spacewar_seamless");
+        assert!(status.verified);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn seamless_without_steam_manifest_is_not_assumed_official() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_unverified_seamless_test_{}",
+            current_timestamp()
+        ));
+        let game_dir = root.join("Game");
+        fs::create_dir_all(game_dir.join("SeamlessCoop")).unwrap();
+        fs::write(game_dir.join("SeamlessCoop").join("nrsc.dll"), b"dll").unwrap();
+        fs::write(
+            game_dir.join("SeamlessCoop").join("nrsc_settings.ini"),
+            b"save_file_extension = co2",
+        )
+        .unwrap();
+        let config = AppConfig {
+            game_path: game_dir.to_string_lossy().to_string(),
+            me3_path: String::new(),
+            launch_exe_path: String::new(),
+            runtime_environment: RuntimeEnvironment::Auto,
+        };
+
+        let status = build_runtime_environment_status(&config);
+
+        assert_eq!(status.detected, "unknown_mixed");
+        assert_eq!(status.effective, "unknown_mixed");
+        assert!(!status.verified);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn server_redirector_detects_partial_onlinefix_and_steam_emulator_files() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_redirector_conflict_test_{}",
+            current_timestamp()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("OnlineFix64.dll"), b"test").unwrap();
+        fs::write(root.join("steam_emu.ini"), b"test").unwrap();
+
+        let conflicts = server_redirector_conflict_files(&root);
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(
+            conflicts,
+            vec!["OnlineFix64.dll".to_string(), "steam_emu.ini".to_string()]
+        );
+    }
+
+    #[test]
+    #[ignore = "requires NIGHTREIGN_MMV_TEST_DIR to point to a downloaded MMV pack"]
+    fn verifies_downloaded_mmv_author_profile() {
+        let mod_dir = std::env::var("NIGHTREIGN_MMV_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_MMV_TEST_DIR");
+        let (packages, natives, metadata) = collect_profile_data_for_mod(&mod_dir).unwrap();
+        let generated = build_me3_profile(&metadata, &packages, &natives).unwrap();
+        let value = generated.parse::<toml::Value>().unwrap();
+
+        assert!(!packages.is_empty());
+        assert_eq!(
+            detect_network_backend(&natives).unwrap(),
+            NetworkBackend::ServerRedirector
+        );
+        assert_eq!(
+            value.get("savefile").and_then(toml::Value::as_str),
+            Some("NR0000.co2")
+        );
+        assert_eq!(
+            value.get("start_online").and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("supports")
+                .and_then(toml::Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|entry| entry.get("game"))
+                .and_then(toml::Value::as_str),
+            Some("nightreign")
+        );
+        assert!(!natives.iter().any(|native| {
+            network_backend_for_native_path(&native.path) == NetworkBackend::Seamless
+        }));
+    }
+
+    #[test]
+    #[ignore = "requires NIGHTREIGN_MMV_TEST_DIR and NIGHTREIGN_GAME_TEST_DIR"]
+    fn verifies_downloaded_mmv_community_override() {
+        let mod_dir = std::env::var("NIGHTREIGN_MMV_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_MMV_TEST_DIR");
+        let game_dir = std::env::var("NIGHTREIGN_GAME_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_GAME_TEST_DIR");
+        let (packages, mut natives, mut metadata) = collect_profile_data_for_mod(&mod_dir).unwrap();
+        let config = AppConfig {
+            game_path: game_dir.to_string_lossy().to_string(),
+            me3_path: String::new(),
+            launch_exe_path: String::new(),
+            runtime_environment: RuntimeEnvironment::SpacewarSeamless,
+        };
+
+        apply_mmv_seamless_community_override(
+            &mod_dir,
+            &packages,
+            &mut natives,
+            &mut metadata,
+            &config,
+        )
+        .unwrap();
+        let mut seen = BTreeSet::new();
+        extend_unique_natives(&mut natives, &mut seen, infer_game_root_natives(&game_dir));
+        let generated = build_me3_profile(&metadata, &packages, &natives).unwrap();
+
+        assert_eq!(collect_regulation_files(&packages).len(), 1);
+        assert_eq!(
+            detect_network_backend(&natives).unwrap(),
+            NetworkBackend::Seamless
+        );
+        assert!(!generated.contains("cl_server_redirector.dll"));
+        assert!(generated.contains("nrsc.dll"));
+    }
+
+    #[test]
+    #[ignore = "requires a local workspace with MMV enabled"]
+    fn verifies_current_workspace_uses_mmv_without_seamless_injection() {
+        assert_eq!(
+            std::env::var("NIGHTREIGN_VERIFY_CURRENT_WORKSPACE").as_deref(),
+            Ok("1")
+        );
+        let mods = collect_mods().unwrap();
+        let mmv = mods
+            .iter()
+            .find(|mod_info| mod_info.network_backend == "server_redirector")
+            .expect("enabled MMV should be detected");
+        assert!(mmv.author_profile);
+        assert_eq!(mmv.savefile, "NR0000.co2");
+        assert_eq!(mmv.start_online, Some(true));
+
+        let plan = build_generated_profile_plan().unwrap();
+        let value = plan.content.parse::<toml::Value>().unwrap();
+        let native_paths = value
+            .get("natives")
+            .and_then(toml::Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry.get("path").and_then(toml::Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert_eq!(plan.network_backend, NetworkBackend::ServerRedirector);
+        assert_eq!(plan.savefile.as_deref(), Some("NR0000.co2"));
+        assert_eq!(plan.start_online, Some(true));
+        assert!(native_paths
+            .iter()
+            .any(|path| { path.ends_with(r"Server Redirector\cl_server_redirector.dll") }));
+        assert!(!native_paths.iter().any(|path| {
+            path.ends_with(r"SeamlessCoop\nrsc.dll") || path.ends_with(r"SeamlessCoop\nighter.dll")
+        }));
+
+        let profile_path = PathBuf::from(generate_me3_profile().unwrap());
+        let written = fs::read_to_string(profile_path).unwrap();
+        assert_eq!(written, plan.content);
+
+        let preflight = build_launch_preflight().unwrap();
+        assert!(preflight.checks.iter().any(|check| {
+            check.id == "network_backend"
+                && check.status == "pass"
+                && check.message.contains("Server Redirector")
+        }));
+        assert!(preflight.checks.iter().any(|check| {
+            check.id == "author_profile"
+                && check.status == "pass"
+                && check.message.contains("NR0000.co2")
+        }));
+        assert!(!preflight.ready);
+        assert!(preflight.checks.iter().any(|check| {
+            check.id == "runtime_environment"
+                && check.status == "error"
+                && check.message.contains("Spacewar")
+                && check.message.contains("Server Redirector")
+        }));
+        assert!(preflight.checks.iter().any(|check| {
+            check.id == "onlinefix"
+                && check.status == "error"
+                && check.message.contains("OnlineFix64.dll")
+                && check.message.contains("steam_emu.ini")
+        }));
     }
 
     #[test]

@@ -10,6 +10,7 @@ interface ModsPageProps {
   busy: boolean;
   onToggle: (mod: ModInfo) => void;
   onDelete: (mod: ModInfo) => void;
+  onProfileMode: (mod: ModInfo) => void;
   onRefresh: () => void;
   onInstallZip: (zipPath: string) => Promise<void>;
   onAddExternalMod: () => Promise<void>;
@@ -26,6 +27,7 @@ export function ModsPage({
   busy,
   onToggle,
   onDelete,
+  onProfileMode,
   onRefresh,
   onInstallZip,
   onAddExternalMod,
@@ -56,6 +58,9 @@ export function ModsPage({
   }, [deferredSearch, filterType, mods]);
 
   const conflicts = useMemo(() => getPotentialConflicts(mods), [mods]);
+  const communityCompatibilityActive = mods.some(
+    (mod) => mod.enabled && mod.profileMode === "mmv_seamless_community"
+  );
 
   const installZip = async () => {
     const selected = await open({
@@ -106,7 +111,7 @@ export function ModsPage({
     <PageFrame
       eyebrow="Mod Library"
       title="Mod 仓库"
-      description="扫描 Game\\mods，注册外部 Mod/DLL，并编辑可识别的 JSON/INI 配置。"
+      description="扫描 Game\\mods，注册外部 Mod/DLL，并保留可识别的作者 ME3 Profile 语义。"
     >
       <div className="flex min-h-0 flex-1 flex-col gap-4">
         <section className="panel-card shrink-0 rounded-xl p-4">
@@ -187,6 +192,13 @@ export function ModsPage({
               {conflicts.map((conflict) => conflict.key).join(" / ")}
             </div>
           )}
+
+          {communityCompatibilityActive && (
+            <div className="mt-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
+              已启用社区 Seamless 兼容模式：只改写生成的 ME3 Profile，不修改或重发作者文件。
+              启动前检查会验证单一 regulation.bin、完整中文层和文件指纹。
+            </div>
+          )}
         </section>
 
         <section className="panel-card flex min-h-0 flex-1 flex-col rounded-xl">
@@ -212,6 +224,7 @@ export function ModsPage({
                     onToggle={onToggle}
                     onDelete={onDelete}
                     onConfigure={openConfigEditor}
+                    onProfileMode={onProfileMode}
                   />
                 ))}
               </div>

@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { RuntimeEnvironment } from "../types/mod";
 
 interface SetupGuideProps {
   initialGamePath?: string;
   initialMe3Path?: string;
   initialLaunchExePath?: string;
+  initialRuntimeEnvironment?: RuntimeEnvironment;
   busy?: boolean;
   onSetupComplete: (
     gamePath: string,
     me3Path: string,
-    launchExePath: string
+    launchExePath: string,
+    runtimeEnvironment: RuntimeEnvironment
   ) => Promise<void> | void;
 }
 
@@ -17,12 +20,15 @@ export function SetupGuide({
   initialGamePath = "",
   initialMe3Path = "",
   initialLaunchExePath = "",
+  initialRuntimeEnvironment = "auto",
   busy = false,
   onSetupComplete,
 }: SetupGuideProps) {
   const [gamePath, setGamePath] = useState(initialGamePath);
   const [me3Path, setMe3Path] = useState(initialMe3Path);
   const [launchExePath, setLaunchExePath] = useState(initialLaunchExePath);
+  const [runtimeEnvironment, setRuntimeEnvironment] =
+    useState<RuntimeEnvironment>(initialRuntimeEnvironment);
 
   const selectGamePath = async () => {
     const selected = await open({ directory: true, title: "选择游戏安装目录" });
@@ -63,7 +69,7 @@ export function SetupGuide({
           </p>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-2">
           <SetupCard
             index="1"
             title="游戏目录"
@@ -74,6 +80,30 @@ export function SetupGuide({
             done={Boolean(gamePath)}
             onBrowse={selectGamePath}
           />
+          <section className="panel-card flex min-h-64 flex-col rounded-xl p-5">
+            <div className="grid h-8 w-8 place-items-center rounded-md bg-accent text-sm font-bold text-black">
+              4
+            </div>
+            <h2 className="mt-5 text-lg font-semibold text-text-primary">运行环境</h2>
+            <p className="mt-2 text-sm leading-5 text-text-muted">
+              环境决定 Steam 初始化、联机后端和存档隔离规则。
+            </p>
+            <select
+              value={runtimeEnvironment}
+              onChange={(event) =>
+                setRuntimeEnvironment(event.target.value as RuntimeEnvironment)
+              }
+              className="mt-5 rounded-lg border border-border bg-surface p-3 text-sm text-text-primary outline-none focus:border-accent/65"
+            >
+              <option value="auto">自动检测</option>
+              <option value="steam_official">纯正版 Steam（未实测）</option>
+              <option value="steam_seamless">正版 Steam + Seamless（未实测）</option>
+              <option value="spacewar_seamless">Spacewar + Seamless（已实测）</option>
+            </select>
+            <p className="mt-3 text-xs leading-5 text-warning">
+              只有 Spacewar + Seamless 已完成本机真实启动验证；正版模式采用保守规则。
+            </p>
+          </section>
           <SetupCard
             index="2"
             title="ME3 目录"
@@ -107,7 +137,14 @@ export function SetupGuide({
           <button
             type="button"
             disabled={!canSubmit}
-            onClick={() => void onSetupComplete(gamePath, me3Path, launchExePath)}
+            onClick={() =>
+              void onSetupComplete(
+                gamePath,
+                me3Path,
+                launchExePath,
+                runtimeEnvironment
+              )
+            }
             className="rounded-lg bg-accent px-6 py-3 text-sm font-bold text-black transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
           >
             进入工作台

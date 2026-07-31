@@ -1,0 +1,82 @@
+{
+    "schemaVersion":  2,
+    "id":  "elden-ring-nightreign-mod-manager-20260731-cross-project-mod-manager-knowledge-transf-7c6a2e65",
+    "projectId":  "elden-ring-nightreign-mod-manager",
+    "project":  "Elden Ring Nightreign Mod Manager",
+    "date":  "2026-07-31",
+    "type":  "learning",
+    "title":  "跨项目 Mod 管理器经验必须在任务开始检索并转化为执行清单",
+    "summary":  "这次将 Cyberpunk 管理器已验证的 Nexus 下载经验迁移到 Nightreign，成功取得并校验 602 中文真实样本；更重要的发现是，跨项目知识若不在任务开始进入 ReviewHub 检索、执行清单、复用记录和项目记忆，就会在新项目中重复踩坑。",
+    "problem":  "Cyberpunk 与 Nightreign 两个管理器都需要真实 Nexus 样本、ZIP 结构识别、哈希证据和安全安装，但 Nightreign 专项在开始时没有主动检索并应用已有复盘，导致下载超时、浏览器重置、样本暂存和验收边界等问题被重复探索。",
+    "symptoms":  [
+                     "用户已经指出 Cyberpunk 管理器存在相关探索，但 Nightreign 专项最初仍从浏览器导航和下载等待重新试错。",
+                     "Nexus Manual 点击沿用 30 秒外层超时，导致浏览器内核重置和受控标签页消失。",
+                     "下载成功后才讨论统一样本目录，说明下载、证据、复核和项目归档还没有成为一个原子工作流。",
+                     "历史任务已经沉淀了 MMV、NightreignPLUS、ME3 与 Spacewar/Seamless 的领域边界，但没有同时携带 Cyberpunk 的真实样本工程方法。",
+                     "ReviewHub 中 Cyberpunk 卡片的复用次数在本次任务前为 0，Nightreign 项目也未注册。"
+                 ],
+    "rootCause":  "经验被分散在另一个仓库的 AGENTS、reviews 和聊天里；Nightreign 未注册进 ReviewHub，项目交接只强调游戏兼容与启动安全，没有把“任务开始先检索跨项目经验、形成差异表、结束记录复用”设为硬流程。结果是知识迁移依赖用户提醒，而不是系统化检索。",
+    "solution":  [
+                     "在非平凡任务开始前先运行 ReviewHub Get-ReviewContext.ps1，用具体技术和失败模式检索 3–5 张卡，并把会改变计划的规则写成执行清单。",
+                     "把 Nightreign 项目注册进 ReviewHub，让项目级复盘卡、Obsidian 知识视图和跨项目检索进入同一索引。",
+                     "跨项目迁移时先列“可直接复用 / 领域差异 / 必须新增”的对照表：下载证据链可直接复用；Cyberpunk 的 REDmod/TweakXL 规则不可照搬；Nightreign 需要 ME3、Spacewar、Seamless、regulation 和中文覆盖层检查。",
+                     "开发期下载采用固定暂存区 D:\\Project\\Game-create\\_downloads\\\u003cgame-or-project\u003e，浏览器若只能先落到系统 Downloads，则在哈希后复制到暂存区并保留原始文件名与来源证据。",
+                     "真实样本闭环固定为精确 file_id、人工登录/Cloudflare 边界、唯一下载按钮、足够长的 download 事件、落盘确认、大小与 SHA-256、只读拆包、管理器分类/安装检查、缩小回归测试。",
+                     "知识被实际使用后立即调用 Add-ReviewReuse.ps1 记录 outcome 与证据；完成新发现后再创建项目复盘卡，避免只在聊天总结中提到。",
+                     "自动下载只服务开发期样本获取，不因此把 Nexus 登录或在线下载塞进两个管理器的产品 MVP。"
+                 ],
+    "verification":  [
+                         "ReviewHub Get-ReviewContext 以 Nexus、download、evidence、ME3、Spacewar、Seamless 为查询，准确返回 Cyberpunk 的真实样本下载复盘卡。",
+                         "Nightreign 官方 602 文件 file_id=4318 通过唯一 Slow download 成功获取，下载事件在 49.194 秒内触发。",
+                         "落盘 ZIP 大小为 321793 字节，SHA-256 为 3166254E167551F8F8B85B2897070371D6D58C57407687F4607CC91493946B58。",
+                         "只读 ZIP 检查确认仅含 zhocn/item_dlc01.msgbnd.dcx 与 zhocn/menu_dlc01.msgbnd.dcx，与 Nightreign 管理器新增的 msg\\zhocn 规范化规则匹配。",
+                         "Add-ReviewReuse.ps1 已把本次复用以 validated 结果写回 Cyberpunk 原卡，并完成 ReviewHub 收集与 Obsidian 同步。",
+                         "指定历史任务 019fb31f-b7d0-78b0-a534-15bc3cd77214 已证明 NightreignPLUS 的成功来自预合并 package、ERBM 参数合并、人工资源裁剪和固定 ME3 profile，而不是普通加载顺序。"
+                     ],
+    "mistakes":  [
+                     "没有在 Nightreign 专项开始时先查 ReviewHub；直到用户再次指出 Cyberpunk 项目后才回读已有经验。",
+                     "Nightreign 项目此前未注册进 ReviewHub，使中央检索无法主动返回它自己的后续复盘。",
+                     "早期把跨项目结合等同于“读过另一个仓库文档”，没有把命中的知识转成开始前检查项、复用事件和可验证输出。",
+                     "对 Nexus 手动下载按钮使用过 30 秒外层超时，导致浏览器内核重置和标签页丢失；已有复盘早已记录免费通道应使用更长等待。",
+                     "成功下载后先尝试操作桌面安装 UI，而用户的首要目标其实是验证下载闭环；应先确认验收边界再扩大到游戏目录写入。",
+                     "把 D:\\Project\\Game-create 根目录设为直接下载目的地会污染项目集合；应使用专门的 _downloads 子目录。"
+                 ],
+    "tags":  [
+                 "ReviewHub",
+                 "跨项目知识迁移",
+                 "Nexus Mods",
+                 "真实样本",
+                 "证据链",
+                 "ME3",
+                 "Spacewar",
+                 "SeamlessCoop",
+                 "Mod 管理器",
+                 "Windows"
+             ],
+    "reusability":  "high",
+    "articleScore":  96,
+    "privacy":  "redact",
+    "status":  "inbox",
+    "reuseCount":  0,
+    "appliedIn":  [
+
+                  ],
+    "supersedes":  [
+
+                   ],
+    "contradicts":  [
+
+                    ],
+    "articleAngle":  "为什么“读过另一个仓库”仍不算经验复用：从两套 Mod 管理器重复踩坑到任务前知识检索闭环",
+    "source":  {
+                   "threadId":  "019fb41c-49bf-7062-b8b2-a87b14b3e789",
+                   "commit":  "",
+                   "files":  [
+                                "AGENTS.md",
+                                "docs/CURRENT_STATUS.md",
+                                "docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md",
+                                "app/src-tauri/src/commands/mod_manager.rs",
+                                "D:\\Project\\Game-create\\Cyberpunk2077-ModManager\\docs\\reviews\\2026-07-12-in-app-browser-download-real-sample-loop.review.json"
+                             ]
+               }
+}

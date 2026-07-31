@@ -1,5 +1,12 @@
 import { useState } from "react";
-import type { LaunchPreflight, LaunchPreflightCheck, ModInfo, Profile, SpecialModStatus } from "../types/mod";
+import type {
+  LaunchPreflight,
+  LaunchPreflightCheck,
+  ModInfo,
+  Profile,
+  RuntimeEnvironmentStatus,
+  SpecialModStatus,
+} from "../types/mod";
 import type { ReactNode } from "react";
 
 interface LaunchPageProps {
@@ -9,12 +16,14 @@ interface LaunchPageProps {
   me3Path: string;
   launchExePath: string;
   specialModStatus: SpecialModStatus | null;
+  runtimeEnvironmentStatus: RuntimeEnvironmentStatus | null;
   busy: boolean;
   onLaunch: () => void;
   onPreflight: () => Promise<LaunchPreflight | undefined>;
   onRefresh: () => void;
   onOpenDiagnostics: () => void;
   onPrepareOnline: () => void;
+  onRestoreOnline: () => void;
 }
 
 export function LaunchPage({
@@ -24,20 +33,43 @@ export function LaunchPage({
   me3Path,
   launchExePath,
   specialModStatus,
+  runtimeEnvironmentStatus,
   busy,
   onLaunch,
   onPreflight,
   onRefresh,
   onOpenDiagnostics,
   onPrepareOnline,
+  onRestoreOnline,
 }: LaunchPageProps) {
   const [preflight, setPreflight] = useState<LaunchPreflight | null>(null);
   const enabledMods = mods.filter((mod) => mod.enabled);
   const launchTarget = launchExePath.trim()
     ? launchExePath.split(/[\\/]/).pop() || "自定义启动程序"
     : "nightreign.exe";
+  const serverRedirectorMod = enabledMods.find(
+    (mod) => mod.networkBackend === "server_redirector"
+  );
+  const usingServerRedirector = Boolean(serverRedirectorMod);
+  const redirectorEnvironmentConflict = Boolean(
+    usingServerRedirector && specialModStatus?.serverRedirectorConflicts.length
+  );
+  const runtimeEnvironment = runtimeEnvironmentStatus?.effective ?? "unknown_mixed";
+  const canInstallOnlinePatch =
+    runtimeEnvironment === "spacewar_seamless" && !usingServerRedirector;
   const onlineReady = Boolean(
-    specialModStatus?.seamlessInstalled && specialModStatus.onlinefixInstalled
+    usingServerRedirector
+      ? runtimeEnvironment === "steam_official" && !redirectorEnvironmentConflict
+      : runtimeEnvironment === "steam_official"
+        ? !specialModStatus?.serverRedirectorConflicts.length &&
+          !specialModStatus?.seamlessInstalled
+        : runtimeEnvironment === "steam_seamless"
+          ? specialModStatus?.seamlessInstalled &&
+            !specialModStatus.serverRedirectorConflicts.length
+          : runtimeEnvironment === "spacewar_seamless"
+            ? specialModStatus?.seamlessInstalled &&
+              specialModStatus.onlinefixInstalled
+            : false
   );
 
   const runPreflight = async () => {
@@ -65,6 +97,8 @@ export function LaunchPage({
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-text-secondary">
                   将生成 ME3 Profile，并以 <span className="font-semibold text-text-primary">{launchTarget}</span> 启动。
+                  {usingServerRedirector &&
+                    " 当前方案将保留作者配置，使用 Server Redirector 和正版 Steam 环境。"}
                 </p>
               </div>
               <div className="flex items-baseline gap-2 text-text-muted">
@@ -128,13 +162,35 @@ export function LaunchPage({
                 </button>
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || !canInstallOnlinePatch}
                   onClick={onPrepareOnline}
+                  title={
+                    usingServerRedirector
+                      ? "MMV Server Redirector 不能与 OnlineFix 共用"
+                      : !canInstallOnlinePatch
+                        ? "只有 Spacewar + Seamless 环境允许安装 OnlineFix 补丁"
+                        : undefined
+                  }
                   className="rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-xs text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary disabled:opacity-50"
                 >
-                  应用联机补丁
+                  {usingServerRedirector
+                    ? "MMV 不用此补丁"
+                    : canInstallOnlinePatch
+                      ? "应用联机补丁"
+                      : "当前环境禁用补丁"}
                 </button>
               </div>
+              {specialModStatus?.latestPatchBackup && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onRestoreOnline}
+                  className="rounded-lg border border-warning/35 bg-warning/10 px-3.5 py-2.5 text-left text-xs font-semibold text-warning transition-colors hover:border-warning/65 disabled:opacity-50"
+                  title={specialModStatus.latestPatchBackup}
+                >
+                  恢复最近一次联机补丁备份
+                </button>
+              )}
             </div>
           </section>
         </div>
@@ -175,23 +231,93 @@ export function LaunchPage({
                 {onlineReady ? "联机组件就绪" : "存在可选组件提醒"}
               </span>
             </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <SpecialRow
-                label="SeamlessCoop"
-                ok={Boolean(specialModStatus?.seamlessInstalled)}
-                value={specialModStatus?.seamlessInstalled ? "已安装" : "未安装"}
+                label="环境模式"
+                ok={Boolean(runtimeEnvironmentStatus?.verified)}
+                value={`${runtimeEnvironmentLabel(runtimeEnvironment)} · ${
+                  runtimeEnvironmentStatus?.verified ? "已实测" : "未实测/需检查"
+                }`}
               />
               <SpecialRow
-                label="OnlineFix"
-                ok={Boolean(specialModStatus?.onlinefixInstalled)}
-                value={specialModStatus?.onlinefixInstalled ? "已安装" : "未安装"}
+                label="Server Redirector"
+                ok={usingServerRedirector}
+                value={
+                  usingServerRedirector
+                    ? `由 ${serverRedirectorMod?.name ?? "当前 Mod"} 提供`
+                    : "当前方案未使用"
+                }
+              />
+              <SpecialRow
+                label="SeamlessCoop"
+                ok={usingServerRedirector || Boolean(specialModStatus?.seamlessInstalled)}
+                value={
+                  usingServerRedirector
+                    ? specialModStatus?.seamlessInstalled
+                      ? "已安装 · 本方案不注入"
+                      : "本方案不需要"
+                    : specialModStatus?.seamlessInstalled
+                      ? "已安装"
+                      : "未安装"
+                }
+              />
+              <SpecialRow
+                label="OnlineFix / Spacewar"
+                ok={
+                  usingServerRedirector
+                    ? !specialModStatus?.serverRedirectorConflicts.length
+                    : Boolean(specialModStatus?.onlinefixInstalled)
+                }
+                value={
+                  usingServerRedirector
+                    ? specialModStatus?.serverRedirectorConflicts.length
+                      ? `冲突 · ${specialModStatus.serverRedirectorConflicts.join(", ")}`
+                      : "未安装 · 符合 MMV 要求"
+                    : specialModStatus?.onlinefixInstalled
+                      ? "已安装"
+                      : "未安装"
+                }
               />
               <SpecialRow
                 label="Nighter"
-                ok={Boolean(specialModStatus?.nighterAvailable)}
-                value={specialModStatus?.nighterAvailable ? specialModStatus.nighterPath : "未检测到"}
+                ok={usingServerRedirector || Boolean(specialModStatus?.nighterAvailable)}
+                value={
+                  usingServerRedirector
+                    ? specialModStatus?.nighterAvailable
+                      ? "已检测到 · 本方案不注入"
+                      : "本方案不加载"
+                    : specialModStatus?.nighterAvailable
+                      ? specialModStatus.nighterPath
+                      : "未检测到"
+                }
               />
             </div>
+            {runtimeEnvironmentStatus && (
+              <p
+                className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-5 ${
+                  runtimeEnvironmentStatus.verified
+                    ? "border-success/25 bg-success/10 text-success"
+                    : "border-warning/25 bg-warning/10 text-warning"
+                }`}
+              >
+                配置：{runtimeEnvironmentLabel(runtimeEnvironmentStatus.configured)}；检测：
+                {runtimeEnvironmentLabel(runtimeEnvironmentStatus.detected)}。仅 Spacewar +
+                Seamless 已完成本机真实启动验证。
+              </p>
+            )}
+            {usingServerRedirector && (
+              <p
+                className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-5 ${
+                  redirectorEnvironmentConflict
+                    ? "border-danger/25 bg-danger/10 text-danger"
+                    : "border-success/25 bg-success/10 text-success"
+                }`}
+              >
+                {redirectorEnvironmentConflict
+                  ? "MMV 已识别，但当前 Game 目录包含 OnlineFix / Spacewar；启动将被阻止。请在设置中选择干净的 Steam 正版 Game 目录。"
+                  : "MMV 兼容模式已启用：保留作者存档与在线启动字段，使用 Steam 初始化，并屏蔽游戏目录中的 SeamlessCoop/nighter 注入。"}
+              </p>
+            )}
             {specialModStatus && specialModStatus.missingGameFiles.length > 0 && (
               <p className="mt-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
                 联机目录缺少：{specialModStatus.missingGameFiles.join(", ")}
@@ -223,6 +349,17 @@ export function LaunchPage({
       </div>
     </PageFrame>
   );
+}
+
+function runtimeEnvironmentLabel(value: string) {
+  const labels: Record<string, string> = {
+    auto: "自动检测",
+    steam_official: "纯正版 Steam",
+    steam_seamless: "正版 Steam + Seamless",
+    spacewar_seamless: "Spacewar + Seamless",
+    unknown_mixed: "未知/混合环境",
+  };
+  return labels[value] ?? value;
 }
 
 function PreflightRow({ check }: { check: LaunchPreflightCheck }) {

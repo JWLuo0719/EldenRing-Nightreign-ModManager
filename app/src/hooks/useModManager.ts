@@ -7,8 +7,11 @@ import type {
   LaunchArtifacts,
   LaunchPreflight,
   ModInfo,
+  ModInstallResult,
   Profile,
   ProfileMod,
+  RuntimeEnvironment,
+  RuntimeEnvironmentStatus,
   SpecialModStatus,
   Toast,
   ToastType,
@@ -41,6 +44,8 @@ export function useModManager() {
   const [me3Path, setMe3PathState] = useState("");
   const [launchExePath, setLaunchExePathState] = useState("");
   const [specialModStatus, setSpecialModStatus] = useState<SpecialModStatus | null>(null);
+  const [runtimeEnvironmentStatus, setRuntimeEnvironmentStatus] =
+    useState<RuntimeEnvironmentStatus | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
 
@@ -53,29 +58,33 @@ export function useModManager() {
   }, []);
 
   const loadWorkspace = useCallback(async () => {
-    const [modsData, profilesData, activeData, specialStatus] = await Promise.all([
+    const [modsData, profilesData, activeData, specialStatus, runtimeStatus] = await Promise.all([
       invoke<ModInfo[]>("scan_mods"),
       invoke<Profile[]>("get_profiles"),
       invoke<Profile | null>("get_active_profile"),
       invoke<SpecialModStatus>("get_special_mod_status"),
+      invoke<RuntimeEnvironmentStatus>("get_runtime_environment_status"),
     ]);
     setMods(modsData);
     setProfiles(profilesData);
     setActiveProfile(activeData);
     setSpecialModStatus(specialStatus);
+    setRuntimeEnvironmentStatus(runtimeStatus);
     return { modsData, profilesData, activeData };
   }, []);
 
   const loadPaths = useCallback(async () => {
-    const [nextGamePath, nextMe3Path, nextLaunchExePath] = await Promise.all([
+    const [nextGamePath, nextMe3Path, nextLaunchExePath, runtimeStatus] = await Promise.all([
       invoke<string>("get_game_path"),
       invoke<string>("get_me3_path"),
       invoke<string>("get_launch_exe_path"),
+      invoke<RuntimeEnvironmentStatus>("get_runtime_environment_status"),
     ]);
 
     setGamePathState(nextGamePath);
     setMe3PathState(nextMe3Path);
     setLaunchExePathState(nextLaunchExePath);
+    setRuntimeEnvironmentStatus(runtimeStatus);
 
     const isConfigured = Boolean(nextGamePath && nextMe3Path);
     setConfigured(isConfigured);
@@ -115,11 +124,17 @@ export function useModManager() {
   }, [loadPaths, pushToast]);
 
   const savePaths = useCallback(
-    async (nextGamePath: string, nextMe3Path: string, nextLaunchExePath: string) => {
+    async (
+      nextGamePath: string,
+      nextMe3Path: string,
+      nextLaunchExePath: string,
+      runtimeEnvironment: RuntimeEnvironment
+    ) => {
       await runTask(async () => {
         await invoke("set_game_path", { path: nextGamePath });
         await invoke("set_me3_path", { path: nextMe3Path });
         await invoke("set_launch_exe_path", { path: nextLaunchExePath });
+        await invoke("set_runtime_environment", { environment: runtimeEnvironment });
         setGamePathState(nextGamePath);
         setMe3PathState(nextMe3Path);
         setLaunchExePathState(nextLaunchExePath);
@@ -212,6 +227,38 @@ export function useModManager() {
     [activeProfile, loadWorkspace, pushToast, runTask]
   );
 
+  const setExternalProfileMode = useCallback(
+    (mod: ModInfo) => {
+      const useCommunityMode = mod.profileMode !== "mmv_seamless_community";
+      setConfirmState({
+        title: useCommunityMode ? "启用社区 Seamless 兼容模式" : "恢复作者联机方式",
+        message: useCommunityMode
+          ? `管理器只会在生成的 active-nightreign.me3 副本中移除 Server Redirector，并改用游戏目录现有的 SeamlessCoop\\nrsc.dll。\n\n原始 Mod、作者 .me3、regulation.bin 和 DLL 都不会被修改。此方式来自社区实践，不受 MMV 作者支持；启用前会强制检查运行环境、单一 regulation.bin 和中文层。`
+          : "管理器将恢复使用作者 .me3 中的 Server Redirector。原始 Mod 文件仍不会被修改；该模式只适用于干净的 Steam 正版目录。",
+        confirmText: useCommunityMode ? "启用兼容模式" : "恢复作者模式",
+        danger: useCommunityMode,
+        onConfirm: async () => {
+          await runTask(async () => {
+            await invoke("set_external_mod_profile_mode", {
+              modId: mod.id,
+              profileMode: useCommunityMode
+                ? "mmv_seamless_community"
+                : "author",
+            });
+            await loadWorkspace();
+            pushToast(
+              "success",
+              useCommunityMode
+                ? "已启用社区 Seamless 兼容模式"
+                : "已恢复作者 Server Redirector 模式"
+            );
+          }, "切换外部 Mod Profile 模式失败");
+        },
+      });
+    },
+    [loadWorkspace, pushToast, runTask]
+  );
+
   const addExternalMod = useCallback(async () => {
     const selected = await open({
       directory: true,
@@ -280,8 +327,8 @@ export function useModManager() {
     setConfirmState({
       title: "准备联机补丁",
       message:
-        `将把所选补丁 Game 文件夹中的 SeamlessCoop 和 OnlineFix 文件复制到当前游戏 Game 目录。\n\n源目录：${selected}\n\n会覆盖同名文件，包括 steam_api64.dll。请确认你要进入 SeamlessCoop/Spacewar 环境。`,
-      confirmText: "复制并覆盖",
+        `将把所选补丁 Game 文件夹中的 SeamlessCoop 和 OnlineFix 文件复制到当前游戏 Game 目录。\n\n源目录：${selected}\n\n管理器会先备份 8 个受管目标；失败时自动回滚，并可从启动台恢复最近备份。该操作只允许 Spacewar + Seamless 环境，Steam 正版目录会被后端阻止。`,
+      confirmText: "备份后安装",
       danger: true,
       onConfirm: async () => {
         await runTask(async () => {
@@ -296,12 +343,37 @@ export function useModManager() {
     });
   }, [loadWorkspace, pushToast, runTask]);
 
+  const restoreOnlinePatchBackup = useCallback(() => {
+    setConfirmState({
+      title: "恢复联机补丁安装前状态",
+      message:
+        "将按最近一次备份清单恢复被覆盖的原文件，并移除那次安装新增的受管文件。只处理清单中的 8 个联机补丁目标。",
+      confirmText: "恢复最近备份",
+      danger: true,
+      onConfirm: async () => {
+        await runTask(async () => {
+          const status = await invoke<SpecialModStatus>(
+            "restore_latest_online_patch_backup"
+          );
+          setSpecialModStatus(status);
+          await loadWorkspace();
+          pushToast("success", "已恢复联机补丁安装前状态");
+        }, "恢复联机补丁备份失败");
+      },
+    });
+  }, [loadWorkspace, pushToast, runTask]);
+
   const installZip = useCallback(
     async (zipPath: string) => {
       await runTask(async () => {
-        await invoke("install_mod_from_zip", { zipPath });
+        const result = await invoke<ModInstallResult>("install_mod_from_zip", { zipPath });
         await loadWorkspace();
-        pushToast("success", "Mod 已安装，请检查结构后再启动游戏");
+        pushToast(
+          "success",
+          result.zhocnLayoutNormalized
+            ? "Mod 已安装，汉化目录已规范为 msg\\zhocn"
+            : "Mod 已安装并通过目录结构检查"
+        );
       }, "安装 Mod 失败");
     },
     [loadWorkspace, pushToast, runTask]
@@ -456,6 +528,7 @@ export function useModManager() {
     me3Path,
     launchExePath,
     specialModStatus,
+    runtimeEnvironmentStatus,
     toasts,
     confirmState,
     stats,
@@ -465,12 +538,14 @@ export function useModManager() {
     refresh,
     toggleMod,
     deleteMod,
+    setExternalProfileMode,
     addExternalMod,
     addExternalDll,
     readModConfig,
     writeModConfig,
     installZip,
     installSeamlessOnlinefix,
+    restoreOnlinePatchBackup,
     activateProfile,
     createProfile,
     deleteProfile,

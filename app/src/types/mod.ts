@@ -10,7 +10,17 @@ export interface ModInfo {
   files: string[];
   source: "local" | "game_native" | "external_package" | "external_native";
   configFiles: string[];
+  authorProfile: boolean;
+  networkBackend: "none" | "seamless" | "server_redirector";
+  savefile: string;
+  startOnline: boolean | null;
+  profileMode: "author" | "mmv_seamless_community";
   icon?: string;
+}
+
+export interface ModInstallResult {
+  path: string;
+  zhocnLayoutNormalized: boolean;
 }
 
 export interface Profile {
@@ -79,10 +89,28 @@ export interface SpecialModStatus {
   gamePath: string;
   seamlessInstalled: boolean;
   onlinefixInstalled: boolean;
+  serverRedirectorConflicts: string[];
   nighterAvailable: boolean;
   nighterPath: string;
   nighterConfigPath: string;
   missingGameFiles: string[];
+  latestPatchBackup: string;
+}
+
+export type RuntimeEnvironment =
+  | "auto"
+  | "steam_official"
+  | "steam_seamless"
+  | "spacewar_seamless";
+
+export interface RuntimeEnvironmentStatus {
+  configured: RuntimeEnvironment;
+  detected: RuntimeEnvironment | "unknown_mixed";
+  effective: RuntimeEnvironment | "unknown_mixed";
+  verified: boolean;
+  confidence: "low" | "medium" | "high";
+  evidence: string[];
+  warnings: string[];
 }
 
 export type PreflightStatus = "pass" | "warning" | "error";

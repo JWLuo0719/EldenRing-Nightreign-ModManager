@@ -40,6 +40,9 @@ function App() {
           initialGamePath={manager.gamePath}
           initialMe3Path={manager.me3Path}
           initialLaunchExePath={manager.launchExePath}
+          initialRuntimeEnvironment={
+            manager.runtimeEnvironmentStatus?.configured ?? "auto"
+          }
           onSetupComplete={manager.savePaths}
         />
         <ToastHost toasts={manager.toasts} />
@@ -65,12 +68,14 @@ function App() {
             me3Path={manager.me3Path}
             launchExePath={manager.launchExePath}
             specialModStatus={manager.specialModStatus}
+            runtimeEnvironmentStatus={manager.runtimeEnvironmentStatus}
             busy={manager.busy}
             onLaunch={manager.launchGame}
             onPreflight={manager.runLaunchPreflight}
             onRefresh={manager.refresh}
             onOpenDiagnostics={() => setCurrentPage("diagnostics")}
             onPrepareOnline={manager.installSeamlessOnlinefix}
+            onRestoreOnline={manager.restoreOnlinePatchBackup}
           />
         )}
 
@@ -81,6 +86,7 @@ function App() {
             busy={manager.busy}
             onToggle={manager.toggleMod}
             onDelete={manager.deleteMod}
+            onProfileMode={manager.setExternalProfileMode}
             onRefresh={manager.refresh}
             onInstallZip={manager.installZip}
             onAddExternalMod={manager.addExternalMod}
@@ -119,6 +125,7 @@ function App() {
             gamePath={manager.gamePath}
             me3Path={manager.me3Path}
             launchExePath={manager.launchExePath}
+            runtimeEnvironmentStatus={manager.runtimeEnvironmentStatus}
             busy={manager.busy}
             onSave={manager.savePaths}
           />

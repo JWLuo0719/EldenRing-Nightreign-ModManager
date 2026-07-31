@@ -7,11 +7,24 @@ interface ModCardProps {
   onToggle: (mod: ModInfo) => void;
   onDelete: (mod: ModInfo) => void;
   onConfigure: (mod: ModInfo) => void;
+  onProfileMode: (mod: ModInfo) => void;
 }
 
-export function ModCard({ mod, tracked, onToggle, onDelete, onConfigure }: ModCardProps) {
+export function ModCard({
+  mod,
+  tracked,
+  onToggle,
+  onDelete,
+  onConfigure,
+  onProfileMode,
+}: ModCardProps) {
   const isExternal = mod.source === "external_package" || mod.source === "external_native";
   const hasConfig = mod.configFiles.length > 0;
+  const canChangeProfileMode =
+    mod.source === "external_package" &&
+    mod.authorProfile &&
+    (mod.networkBackend === "server_redirector" ||
+      mod.profileMode === "mmv_seamless_community");
 
   return (
     <article className={`group relative overflow-hidden rounded-lg border bg-surface/55 p-4 transition-all hover:-translate-y-px hover:border-accent/45 hover:bg-surface/80 ${mod.enabled ? "border-accent/30" : "border-border"}`}>
@@ -25,6 +38,14 @@ export function ModCard({ mod, tracked, onToggle, onDelete, onConfigure }: ModCa
             <Badge tone={mod.enabled ? "success" : "muted"}>{mod.enabled ? "启用" : "停用"}</Badge>
             {tracked && <Badge tone="info">当前方案</Badge>}
             {isExternal && <Badge tone="info">外部</Badge>}
+            {mod.authorProfile && <Badge tone="accent">作者 Profile</Badge>}
+            {mod.profileMode === "mmv_seamless_community" && (
+              <Badge tone="warning">社区 Seamless</Badge>
+            )}
+            {mod.networkBackend === "server_redirector" && (
+              <Badge tone="success">Server Redirector</Badge>
+            )}
+            {mod.networkBackend === "seamless" && <Badge tone="info">Seamless</Badge>}
             {mod.source === "game_native" && <Badge tone="info">Game\\mods</Badge>}
           </div>
 
@@ -35,9 +56,29 @@ export function ModCard({ mod, tracked, onToggle, onDelete, onConfigure }: ModCa
 
           <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-text-muted">
             {mod.version && <span className="rounded-md bg-elevated px-2 py-1">v{mod.version}</span>}
+            {mod.savefile && (
+              <span className="rounded-md bg-elevated px-2 py-1">存档 {mod.savefile}</span>
+            )}
+            {mod.startOnline !== null && (
+              <span className="rounded-md bg-elevated px-2 py-1">
+                {mod.startOnline ? "在线启动" : "离线启动"}
+              </span>
+            )}
             <span className="rounded-md bg-elevated px-2 py-1">{mod.files.length} 个顶层项</span>
             <span className="max-w-full truncate rounded-md bg-elevated px-2 py-1">{mod.id}</span>
           </div>
+
+          {canChangeProfileMode && (
+            <button
+              type="button"
+              onClick={() => onProfileMode(mod)}
+              className="mt-3 rounded-lg border border-warning/35 bg-warning/10 px-3 py-1.5 text-xs font-semibold text-warning transition-colors hover:border-warning/60 hover:bg-warning/15"
+            >
+              {mod.profileMode === "mmv_seamless_community"
+                ? "恢复作者 Server Redirector"
+                : "改用社区 Seamless 兼容"}
+            </button>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">

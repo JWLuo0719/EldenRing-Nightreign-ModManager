@@ -1,25 +1,35 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { PageFrame } from "./LaunchPage";
+import type { RuntimeEnvironment, RuntimeEnvironmentStatus } from "../types/mod";
 
 interface SettingsPageProps {
   gamePath: string;
   me3Path: string;
   launchExePath: string;
+  runtimeEnvironmentStatus: RuntimeEnvironmentStatus | null;
   busy: boolean;
-  onSave: (gamePath: string, me3Path: string, launchExePath: string) => Promise<void>;
+  onSave: (
+    gamePath: string,
+    me3Path: string,
+    launchExePath: string,
+    runtimeEnvironment: RuntimeEnvironment
+  ) => Promise<void>;
 }
 
 export function SettingsPage({
   gamePath,
   me3Path,
   launchExePath,
+  runtimeEnvironmentStatus,
   busy,
   onSave,
 }: SettingsPageProps) {
   const [draftGamePath, setDraftGamePath] = useState(gamePath);
   const [draftMe3Path, setDraftMe3Path] = useState(me3Path);
   const [draftLaunchExePath, setDraftLaunchExePath] = useState(launchExePath);
+  const [draftRuntimeEnvironment, setDraftRuntimeEnvironment] =
+    useState<RuntimeEnvironment>(runtimeEnvironmentStatus?.configured ?? "auto");
 
   const selectGamePath = async () => {
     const selected = await open({ directory: true, title: "选择游戏安装目录" });
@@ -84,11 +94,42 @@ export function SettingsPage({
             />
           </div>
 
+          <div className="mt-5 border-t border-border pt-5">
+            <div className="mb-2 flex items-end justify-between gap-3">
+              <label className="text-sm font-semibold text-text-primary">运行环境</label>
+              <span className="text-xs text-text-muted">
+                检测：{runtimeEnvironmentStatus?.detected ?? "unknown"}
+              </span>
+            </div>
+            <select
+              value={draftRuntimeEnvironment}
+              onChange={(event) =>
+                setDraftRuntimeEnvironment(event.target.value as RuntimeEnvironment)
+              }
+              className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-text-primary outline-none focus:border-accent/65"
+            >
+              <option value="auto">自动检测</option>
+              <option value="steam_official">纯正版 Steam（未实测）</option>
+              <option value="steam_seamless">正版 Steam + Seamless（未实测）</option>
+              <option value="spacewar_seamless">Spacewar + Seamless（已实测）</option>
+            </select>
+            <p className="mt-2 text-xs leading-5 text-warning">
+              当前仅 Spacewar + Seamless 完成真实环境回归。正版两种模式会使用更严格的门禁和保守启动参数。
+            </p>
+          </div>
+
           <div className="mt-5 flex justify-end border-t border-border pt-4">
             <button
               type="button"
               disabled={busy || !draftGamePath || !draftMe3Path}
-              onClick={() => void onSave(draftGamePath, draftMe3Path, draftLaunchExePath)}
+              onClick={() =>
+                void onSave(
+                  draftGamePath,
+                  draftMe3Path,
+                  draftLaunchExePath,
+                  draftRuntimeEnvironment
+                )
+              }
               className="rounded-lg bg-accent px-5 py-2.5 text-sm font-bold text-black transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               保存设置
