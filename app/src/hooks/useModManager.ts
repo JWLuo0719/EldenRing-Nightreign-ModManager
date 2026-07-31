@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   ConfirmState,
   FileConflict,
   LaunchArtifacts,
   LaunchPreflight,
+  MultiplayerManifestComparison,
+  MultiplayerManifestExport,
   ModInfo,
   ModInstallResult,
   Profile,
@@ -510,6 +512,51 @@ export function useModManager() {
     }, "分析文件冲突失败");
   }, [pushToast, runTask]);
 
+  const exportMultiplayerManifest = useCallback(async () => {
+    const selected = await save({
+      title: "导出双方联机一致性清单",
+      defaultPath: "nightreign-multiplayer-manifest.json",
+      filters: [{ name: "Nightreign 联机清单", extensions: ["json"] }],
+    });
+    if (typeof selected !== "string") {
+      return;
+    }
+
+    return runTask(async () => {
+      const result = await invoke<MultiplayerManifestExport>(
+        "export_multiplayer_manifest",
+        { path: selected }
+      );
+      pushToast("success", "联机一致性清单已导出");
+      return result;
+    }, "导出联机清单失败");
+  }, [pushToast, runTask]);
+
+  const compareMultiplayerManifest = useCallback(async () => {
+    const selected = await open({
+      multiple: false,
+      title: "选择好友导出的联机清单",
+      filters: [{ name: "Nightreign 联机清单", extensions: ["json"] }],
+    });
+    if (typeof selected !== "string") {
+      return;
+    }
+
+    return runTask(async () => {
+      const result = await invoke<MultiplayerManifestComparison>(
+        "compare_multiplayer_manifest",
+        { path: selected }
+      );
+      pushToast(
+        result.compatible ? "success" : "error",
+        result.compatible
+          ? "双方联机关键文件、加载顺序与设置一致"
+          : `发现 ${result.differences.filter((item) => item.severity === "error").length} 项阻断差异`
+      );
+      return result;
+    }, "比较联机清单失败");
+  }, [pushToast, runTask]);
+
   const stats = useMemo(() => {
     const enabled = mods.filter((mod) => mod.enabled).length;
     const packages = mods.filter((mod) => mod.type === "package").length;
@@ -556,5 +603,7 @@ export function useModManager() {
     generateProfilePreview,
     getLaunchArtifacts,
     detectFileConflicts,
+    exportMultiplayerManifest,
+    compareMultiplayerManifest,
   };
 }

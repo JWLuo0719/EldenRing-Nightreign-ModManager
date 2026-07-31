@@ -35,6 +35,8 @@ pub fn run() {
             mod_manager::get_launch_artifacts,
             mod_manager::get_launch_preflight,
             mod_manager::detect_file_conflicts,
+            mod_manager::export_multiplayer_manifest,
+            mod_manager::compare_multiplayer_manifest,
             mod_manager::get_special_mod_status,
             mod_manager::install_seamless_onlinefix,
             mod_manager::restore_latest_online_patch_backup,

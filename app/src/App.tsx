@@ -116,6 +116,8 @@ function App() {
             onGenerateProfile={manager.generateProfilePreview}
             onReadArtifacts={manager.getLaunchArtifacts}
             onDetectConflicts={manager.detectFileConflicts}
+            onExportMultiplayerManifest={manager.exportMultiplayerManifest}
+            onCompareMultiplayerManifest={manager.compareMultiplayerManifest}
             onToast={(message) => manager.pushToast("info", message)}
           />
         )}

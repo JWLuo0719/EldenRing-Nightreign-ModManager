@@ -57,10 +57,6 @@
     "articleScore":  96,
     "privacy":  "redact",
     "status":  "inbox",
-    "reuseCount":  0,
-    "appliedIn":  [
-
-                  ],
     "supersedes":  [
 
                    ],
@@ -72,11 +68,29 @@
                    "threadId":  "019fb41c-49bf-7062-b8b2-a87b14b3e789",
                    "commit":  "",
                    "files":  [
-                                "AGENTS.md",
-                                "docs/CURRENT_STATUS.md",
-                                "docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md",
-                                "app/src-tauri/src/commands/mod_manager.rs",
-                                "D:\\Project\\Game-create\\Cyberpunk2077-ModManager\\docs\\reviews\\2026-07-12-in-app-browser-download-real-sample-loop.review.json"
+                                 "AGENTS.md",
+                                 "docs/CURRENT_STATUS.md",
+                                 "docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md",
+                                 "app/src-tauri/src/commands/mod_manager.rs",
+                                 "D:\\Project\\Game-create\\Cyberpunk2077-ModManager\\docs\\reviews\\2026-07-12-in-app-browser-download-real-sample-loop.review.json"
                              ]
-               }
+               },
+    "appliedIn":  [
+                      {
+                          "id":  "reuse-7d3854748ee1",
+                          "appliedAt":  "2026-07-31",
+                          "context":  "Nightreign 联机一致性清单实现",
+                          "outcome":  "validated",
+                          "evidence":  [
+                                           "任务中再次用具体 manifest/hash/multiplayer 查询 ReviewHub 并读取 4 张卡",
+                                           "将命中经验区分为通用哈希清单、Nightreign 领域差异和新增完整树指纹",
+                                           "新增项目复盘卡并完成真实样本回归"
+                                       ],
+                          "note":  "知识检索实际改变了清单的完整性校验、脱敏和真实样本验收边界。",
+                          "recoveryMinutes":  15
+                      }
+                  ],
+    "reuseCount":  1,
+    "outcomeAfterReuse":  "validated",
+    "lastValidatedAt":  "2026-07-31"
 }

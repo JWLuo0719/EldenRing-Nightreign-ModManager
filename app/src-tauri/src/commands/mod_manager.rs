@@ -16,6 +16,7 @@ const MAX_LAUNCH_LOG_READ_BYTES: u64 = 512 * 1024;
 const MAX_CONFLICT_FILES_SCANNED: usize = 500_000;
 const MAX_CONFLICT_RESULTS: usize = 10_000;
 const MAX_SCAN_DEPTH: usize = 64;
+const MAX_MULTIPLAYER_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const RECOMMENDED_ME3_VERSION: (u32, u32, u32) = (0, 12, 1);
 const OFFICIAL_MOD_SAVEFILE: &str = "NR0000.nmm";
 
@@ -133,6 +134,79 @@ pub struct LaunchPreflightCheck {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiplayerManifest {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub manager_version: String,
+    pub runtime_environment: String,
+    pub network_backend: String,
+    pub packages: Vec<MultiplayerPackageFingerprint>,
+    pub natives: Vec<MultiplayerNativeFingerprint>,
+    pub runtime_files: Vec<MultiplayerFileFingerprint>,
+    pub seamless_settings_sha256: Option<String>,
+    pub overall_sha256: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiplayerPackageFingerprint {
+    pub order: usize,
+    pub name: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+    pub tree_sha256: String,
+    pub regulation_sha256: Option<String>,
+    pub zhocn_item_sha256: Option<String>,
+    pub zhocn_menu_sha256: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiplayerNativeFingerprint {
+    pub order: usize,
+    pub name: String,
+    pub size: u64,
+    pub sha256: String,
+    pub load_early: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiplayerFileFingerprint {
+    pub name: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiplayerManifestExport {
+    pub path: String,
+    pub manifest: MultiplayerManifest,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiplayerManifestDifference {
+    pub severity: String,
+    pub category: String,
+    pub item: String,
+    pub local: String,
+    pub peer: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiplayerManifestComparison {
+    pub compatible: bool,
+    pub local: MultiplayerManifest,
+    pub peer: MultiplayerManifest,
+    pub differences: Vec<MultiplayerManifestDifference>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TasklistProcess {
     name: String,
@@ -220,6 +294,8 @@ struct GeneratedProfilePlan {
     mmv_seamless_community_count: usize,
     regulation_files: Vec<PathBuf>,
     zhocn_packages: Vec<PathBuf>,
+    packages: Vec<PackageEntry>,
+    natives: Vec<NativeEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1293,6 +1369,8 @@ fn build_generated_profile_plan() -> Result<GeneratedProfilePlan, String> {
     let regulation_files = collect_regulation_files(&packages);
     let zhocn_packages = collect_zhocn_packages(&packages);
     let content = build_me3_profile(&metadata, &packages, &natives)?;
+    let package_count = packages.len();
+    let native_count = natives.len();
 
     Ok(GeneratedProfilePlan {
         content,
@@ -1301,11 +1379,13 @@ fn build_generated_profile_plan() -> Result<GeneratedProfilePlan, String> {
         savefile,
         start_online,
         selected_mod_count,
-        package_count: packages.len(),
-        native_count: natives.len(),
+        package_count,
+        native_count,
         mmv_seamless_community_count,
         regulation_files,
         zhocn_packages,
+        packages,
+        natives,
     })
 }
 
@@ -3509,6 +3589,609 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:X}", hasher.finalize()))
 }
 
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:X}", hasher.finalize())
+}
+
+fn manifest_display_name(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("未命名")
+        .to_string();
+    if name.eq_ignore_ascii_case("mod") {
+        path.parent()
+            .and_then(Path::file_name)
+            .and_then(OsStr::to_str)
+            .unwrap_or(&name)
+            .to_string()
+    } else {
+        name
+    }
+}
+
+fn collect_manifest_tree_files(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<(String, PathBuf)>,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_SCAN_DEPTH {
+        return Err(format!(
+            "联机清单扫描已停止：目录嵌套超过安全上限 {MAX_SCAN_DEPTH}"
+        ));
+    }
+    let entries = fs::read_dir(current)
+        .map_err(|error| format!("读取 package 失败 {}：{error}", current.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取 package 项失败：{error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("读取 package 文件类型失败：{error}"))?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "联机清单拒绝跟随符号链接：{}",
+                entry.path().display()
+            ));
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_manifest_tree_files(root, &path, files, depth + 1)?;
+        } else if file_type.is_file() {
+            if files.len() >= MAX_CONFLICT_FILES_SCANNED {
+                return Err(format!(
+                    "联机清单扫描已停止：文件数量超过安全上限 {MAX_CONFLICT_FILES_SCANNED}"
+                ));
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "package 文件超出根目录".to_string())?;
+            let relative = normalize_relative_path(relative)
+                .replace('\\', "/")
+                .to_lowercase();
+            files.push((relative, path));
+        }
+    }
+    Ok(())
+}
+
+fn fingerprint_package_tree(root: &Path) -> Result<(usize, u64, String), String> {
+    let mut files = Vec::new();
+    collect_manifest_tree_files(root, root, &mut files, 0)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    if let Some(duplicate) = files.windows(2).find(|items| items[0].0 == items[1].0) {
+        return Err(format!(
+            "package 包含大小写折叠后重复的相对路径：{}",
+            duplicate[0].0
+        ));
+    }
+
+    let mut total_bytes = 0_u64;
+    let mut hasher = Sha256::new();
+    for (relative, path) in &files {
+        let size = fs::metadata(path)
+            .map_err(|error| format!("读取文件大小失败 {}：{error}", path.display()))?
+            .len();
+        total_bytes = total_bytes
+            .checked_add(size)
+            .ok_or_else(|| "package 总大小溢出".to_string())?;
+        let file_hash = sha256_file(path)?;
+        hasher.update(relative.as_bytes());
+        hasher.update([0]);
+        hasher.update(size.to_le_bytes());
+        hasher.update([0]);
+        hasher.update(file_hash.as_bytes());
+        hasher.update([b'\n']);
+    }
+
+    Ok((files.len(), total_bytes, format!("{:X}", hasher.finalize())))
+}
+
+fn fingerprint_file(name: &str, path: &Path) -> Result<MultiplayerFileFingerprint, String> {
+    Ok(MultiplayerFileFingerprint {
+        name: name.to_string(),
+        size: fs::metadata(path)
+            .map_err(|error| format!("读取文件大小失败 {}：{error}", path.display()))?
+            .len(),
+        sha256: sha256_file(path)?,
+    })
+}
+
+fn build_multiplayer_manifest_from_plan(
+    plan: &GeneratedProfilePlan,
+    config: &AppConfig,
+) -> Result<MultiplayerManifest, String> {
+    let game_dir = Path::new(&config.game_path);
+    validate_game_dir(game_dir)?;
+
+    let mut packages = Vec::with_capacity(plan.packages.len());
+    for (index, package) in plan.packages.iter().enumerate() {
+        let (file_count, total_bytes, tree_sha256) = fingerprint_package_tree(&package.path)?;
+        let zhocn_root = package.path.join("msg").join("zhocn");
+        packages.push(MultiplayerPackageFingerprint {
+            order: index + 1,
+            name: manifest_display_name(&package.path),
+            file_count,
+            total_bytes,
+            tree_sha256,
+            regulation_sha256: package
+                .path
+                .join("regulation.bin")
+                .is_file()
+                .then(|| sha256_file(&package.path.join("regulation.bin")))
+                .transpose()?,
+            zhocn_item_sha256: zhocn_root
+                .join("item_dlc01.msgbnd.dcx")
+                .is_file()
+                .then(|| sha256_file(&zhocn_root.join("item_dlc01.msgbnd.dcx")))
+                .transpose()?,
+            zhocn_menu_sha256: zhocn_root
+                .join("menu_dlc01.msgbnd.dcx")
+                .is_file()
+                .then(|| sha256_file(&zhocn_root.join("menu_dlc01.msgbnd.dcx")))
+                .transpose()?,
+        });
+    }
+
+    let mut natives = Vec::with_capacity(plan.natives.len());
+    for (index, native) in plan.natives.iter().enumerate() {
+        let file = fingerprint_file(&manifest_display_name(&native.path), &native.path)?;
+        natives.push(MultiplayerNativeFingerprint {
+            order: index + 1,
+            name: file.name,
+            size: file.size,
+            sha256: file.sha256,
+            load_early: native.load_early,
+        });
+    }
+
+    let mut runtime_files = Vec::new();
+    for (name, relative) in [
+        ("nightreign.exe", "nightreign.exe"),
+        ("OnlineFix64.dll", "OnlineFix64.dll"),
+        ("winmm.dll", "winmm.dll"),
+        ("steam_api64.dll", "steam_api64.dll"),
+    ] {
+        let path = game_dir.join(relative);
+        if path.is_file() {
+            runtime_files.push(fingerprint_file(name, &path)?);
+        }
+    }
+    runtime_files.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let settings_path = game_dir.join("SeamlessCoop").join("nrsc_settings.ini");
+    let seamless_settings_sha256 = settings_path
+        .is_file()
+        .then(|| sha256_file(&settings_path))
+        .transpose()?;
+    let mut warnings = vec![
+        "清单已脱敏：不包含绝对路径、Windows 用户名、账号目录或存档内容。".to_string(),
+        "OnlineFix.ini 与 steam_emu.ini 可能包含本机身份信息，未写入清单；双方仍需自行确认联机身份与邀请设置。".to_string(),
+    ];
+    if plan.regulation_files.len() != 1 {
+        warnings.push(format!(
+            "当前检测到 {} 个 regulation.bin；地图、敌人和武器参数可能不完整或存在覆盖。",
+            plan.regulation_files.len()
+        ));
+    }
+    if plan.zhocn_packages.len() != 1 {
+        warnings.push(format!(
+            "当前检测到 {} 个完整简中覆盖层；建议双方只启用同一份。",
+            plan.zhocn_packages.len()
+        ));
+    }
+
+    let mut manifest = MultiplayerManifest {
+        schema_version: 1,
+        generated_at: current_timestamp().to_string(),
+        manager_version: env!("CARGO_PKG_VERSION").to_string(),
+        runtime_environment: effective_runtime_environment(config).as_str().to_string(),
+        network_backend: plan.network_backend.as_str().to_string(),
+        packages,
+        natives,
+        runtime_files,
+        seamless_settings_sha256,
+        overall_sha256: String::new(),
+        warnings,
+    };
+    manifest.overall_sha256 = calculate_multiplayer_manifest_sha256(&manifest)?;
+    Ok(manifest)
+}
+
+fn calculate_multiplayer_manifest_sha256(manifest: &MultiplayerManifest) -> Result<String, String> {
+    let mut comparable = manifest.clone();
+    comparable.generated_at.clear();
+    comparable.manager_version.clear();
+    comparable.overall_sha256.clear();
+    comparable.warnings.clear();
+    for package in &mut comparable.packages {
+        package.name.clear();
+    }
+    let bytes =
+        serde_json::to_vec(&comparable).map_err(|error| format!("序列化联机指纹失败：{error}"))?;
+    Ok(sha256_bytes(&bytes))
+}
+
+fn build_multiplayer_manifest() -> Result<MultiplayerManifest, String> {
+    let config = load_config();
+    let plan = build_generated_profile_plan()?;
+    build_multiplayer_manifest_from_plan(&plan, &config)
+}
+
+fn validate_multiplayer_manifest_path(path: &str, must_exist: bool) -> Result<PathBuf, String> {
+    let path = PathBuf::from(path.trim());
+    if path.as_os_str().is_empty()
+        || !path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return Err("联机清单必须使用 .json 文件".to_string());
+    }
+    if must_exist {
+        if !path.is_file() {
+            return Err("所选联机清单不存在".to_string());
+        }
+    } else if !path.parent().is_some_and(Path::is_dir) {
+        return Err("联机清单目标目录不存在".to_string());
+    }
+    Ok(path)
+}
+
+#[command]
+pub async fn export_multiplayer_manifest(
+    path: String,
+) -> Result<MultiplayerManifestExport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = validate_multiplayer_manifest_path(&path, false)?;
+        let manifest = build_multiplayer_manifest()?;
+        let content = serde_json::to_string_pretty(&manifest)
+            .map_err(|error| format!("序列化联机清单失败：{error}"))?;
+        fs::write(&path, content)
+            .map_err(|error| format!("写入联机清单失败 {}：{error}", path.display()))?;
+        Ok(MultiplayerManifestExport {
+            path: path.to_string_lossy().to_string(),
+            manifest,
+        })
+    })
+    .await
+    .map_err(|error| format!("导出联机清单任务异常结束：{error}"))?
+}
+
+fn load_multiplayer_manifest(path: &Path) -> Result<MultiplayerManifest, String> {
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("读取联机清单元数据失败：{error}"))?;
+    if metadata.len() > MAX_MULTIPLAYER_MANIFEST_BYTES {
+        return Err(format!(
+            "联机清单超过 {} MB 安全上限",
+            MAX_MULTIPLAYER_MANIFEST_BYTES / 1024 / 1024
+        ));
+    }
+    let content = fs::read_to_string(path).map_err(|error| format!("读取联机清单失败：{error}"))?;
+    let manifest: MultiplayerManifest =
+        serde_json::from_str(&content).map_err(|error| format!("联机清单 JSON 无效：{error}"))?;
+    if manifest.schema_version != 1 {
+        return Err(format!("不支持的联机清单版本：{}", manifest.schema_version));
+    }
+    validate_multiplayer_manifest_structure(&manifest)?;
+    let calculated = calculate_multiplayer_manifest_sha256(&manifest)?;
+    if !manifest.overall_sha256.eq_ignore_ascii_case(&calculated) {
+        return Err("联机清单总体指纹与内容不一致，文件可能损坏或被手动修改".to_string());
+    }
+    Ok(manifest)
+}
+
+fn validate_multiplayer_manifest_structure(manifest: &MultiplayerManifest) -> Result<(), String> {
+    if manifest.packages.len() > 10_000
+        || manifest.natives.len() > 10_000
+        || manifest.runtime_files.len() > 10_000
+    {
+        return Err("联机清单条目数量超过安全上限".to_string());
+    }
+    if manifest
+        .packages
+        .iter()
+        .enumerate()
+        .any(|(index, package)| package.order != index + 1)
+    {
+        return Err("联机清单 package 加载顺序不连续".to_string());
+    }
+    if manifest
+        .natives
+        .iter()
+        .enumerate()
+        .any(|(index, native)| native.order != index + 1)
+    {
+        return Err("联机清单 DLL 加载顺序不连续".to_string());
+    }
+    let mut runtime_names = BTreeSet::new();
+    if manifest
+        .runtime_files
+        .iter()
+        .any(|file| !runtime_names.insert(file.name.to_lowercase()))
+    {
+        return Err("联机清单包含重复的运行时文件条目".to_string());
+    }
+    Ok(())
+}
+
+fn push_manifest_difference(
+    differences: &mut Vec<MultiplayerManifestDifference>,
+    severity: &str,
+    category: &str,
+    item: impl Into<String>,
+    local: impl Into<String>,
+    peer: impl Into<String>,
+) {
+    differences.push(MultiplayerManifestDifference {
+        severity: severity.to_string(),
+        category: category.to_string(),
+        item: item.into(),
+        local: local.into(),
+        peer: peer.into(),
+    });
+}
+
+fn compare_multiplayer_manifests(
+    local: MultiplayerManifest,
+    peer: MultiplayerManifest,
+) -> MultiplayerManifestComparison {
+    let mut differences = Vec::new();
+    if local.manager_version != peer.manager_version {
+        push_manifest_difference(
+            &mut differences,
+            "warning",
+            "manager",
+            "管理器版本",
+            &local.manager_version,
+            &peer.manager_version,
+        );
+    }
+    for (item, local_value, peer_value) in [
+        (
+            "运行环境",
+            local.runtime_environment.as_str(),
+            peer.runtime_environment.as_str(),
+        ),
+        (
+            "联机后端",
+            local.network_backend.as_str(),
+            peer.network_backend.as_str(),
+        ),
+    ] {
+        if local_value != peer_value {
+            push_manifest_difference(
+                &mut differences,
+                "error",
+                "runtime",
+                item,
+                local_value,
+                peer_value,
+            );
+        }
+    }
+
+    if local.packages.len() != peer.packages.len() {
+        push_manifest_difference(
+            &mut differences,
+            "error",
+            "packages",
+            "package 数量",
+            local.packages.len().to_string(),
+            peer.packages.len().to_string(),
+        );
+    }
+    for index in 0..local.packages.len().max(peer.packages.len()) {
+        match (local.packages.get(index), peer.packages.get(index)) {
+            (Some(left), Some(right)) => {
+                if left.name != right.name {
+                    push_manifest_difference(
+                        &mut differences,
+                        "warning",
+                        "packages",
+                        format!("加载顺序 {} / 显示名称", index + 1),
+                        &left.name,
+                        &right.name,
+                    );
+                }
+                if left.tree_sha256 != right.tree_sha256 {
+                    push_manifest_difference(
+                        &mut differences,
+                        "error",
+                        "packages",
+                        format!("加载顺序 {}", index + 1),
+                        format!("{} · {}", left.name, left.tree_sha256),
+                        format!("{} · {}", right.name, right.tree_sha256),
+                    );
+                }
+                for (category, item, local_value, peer_value) in [
+                    (
+                        "gameplay",
+                        "regulation.bin",
+                        left.regulation_sha256.as_deref(),
+                        right.regulation_sha256.as_deref(),
+                    ),
+                    (
+                        "translation",
+                        "item_dlc01.msgbnd.dcx",
+                        left.zhocn_item_sha256.as_deref(),
+                        right.zhocn_item_sha256.as_deref(),
+                    ),
+                    (
+                        "translation",
+                        "menu_dlc01.msgbnd.dcx",
+                        left.zhocn_menu_sha256.as_deref(),
+                        right.zhocn_menu_sha256.as_deref(),
+                    ),
+                ] {
+                    if local_value != peer_value {
+                        push_manifest_difference(
+                            &mut differences,
+                            "error",
+                            category,
+                            format!("加载顺序 {} / {item}", index + 1),
+                            local_value.unwrap_or("缺少"),
+                            peer_value.unwrap_or("缺少"),
+                        );
+                    }
+                }
+            }
+            (Some(left), None) => push_manifest_difference(
+                &mut differences,
+                "error",
+                "packages",
+                format!("加载顺序 {}", index + 1),
+                &left.name,
+                "缺少",
+            ),
+            (None, Some(right)) => push_manifest_difference(
+                &mut differences,
+                "error",
+                "packages",
+                format!("加载顺序 {}", index + 1),
+                "缺少",
+                &right.name,
+            ),
+            (None, None) => {}
+        }
+    }
+
+    if local.natives.len() != peer.natives.len() {
+        push_manifest_difference(
+            &mut differences,
+            "error",
+            "natives",
+            "DLL 数量",
+            local.natives.len().to_string(),
+            peer.natives.len().to_string(),
+        );
+    }
+    for index in 0..local.natives.len().max(peer.natives.len()) {
+        match (local.natives.get(index), peer.natives.get(index)) {
+            (Some(left), Some(right)) => {
+                if left.name != right.name
+                    || left.sha256 != right.sha256
+                    || left.load_early != right.load_early
+                {
+                    push_manifest_difference(
+                        &mut differences,
+                        "error",
+                        "natives",
+                        format!("加载顺序 {}", index + 1),
+                        format!(
+                            "{} · {} · early={}",
+                            left.name, left.sha256, left.load_early
+                        ),
+                        format!(
+                            "{} · {} · early={}",
+                            right.name, right.sha256, right.load_early
+                        ),
+                    );
+                }
+            }
+            (Some(left), None) => push_manifest_difference(
+                &mut differences,
+                "error",
+                "natives",
+                format!("加载顺序 {}", index + 1),
+                &left.name,
+                "缺少",
+            ),
+            (None, Some(right)) => push_manifest_difference(
+                &mut differences,
+                "error",
+                "natives",
+                format!("加载顺序 {}", index + 1),
+                "缺少",
+                &right.name,
+            ),
+            (None, None) => {}
+        }
+    }
+
+    let local_runtime = local
+        .runtime_files
+        .iter()
+        .map(|item| (item.name.as_str(), item))
+        .collect::<BTreeMap<_, _>>();
+    let peer_runtime = peer
+        .runtime_files
+        .iter()
+        .map(|item| (item.name.as_str(), item))
+        .collect::<BTreeMap<_, _>>();
+    for name in local_runtime
+        .keys()
+        .chain(peer_runtime.keys())
+        .copied()
+        .collect::<BTreeSet<_>>()
+    {
+        match (local_runtime.get(name), peer_runtime.get(name)) {
+            (Some(left), Some(right)) if left.sha256 != right.sha256 => {
+                push_manifest_difference(
+                    &mut differences,
+                    "error",
+                    "runtime_files",
+                    name,
+                    &left.sha256,
+                    &right.sha256,
+                );
+            }
+            (Some(_), None) => push_manifest_difference(
+                &mut differences,
+                "error",
+                "runtime_files",
+                name,
+                "存在",
+                "缺少",
+            ),
+            (None, Some(_)) => push_manifest_difference(
+                &mut differences,
+                "error",
+                "runtime_files",
+                name,
+                "缺少",
+                "存在",
+            ),
+            _ => {}
+        }
+    }
+    if local.seamless_settings_sha256 != peer.seamless_settings_sha256 {
+        push_manifest_difference(
+            &mut differences,
+            "error",
+            "seamless",
+            "nrsc_settings.ini",
+            local.seamless_settings_sha256.as_deref().unwrap_or("缺少"),
+            peer.seamless_settings_sha256.as_deref().unwrap_or("缺少"),
+        );
+    }
+
+    MultiplayerManifestComparison {
+        compatible: !differences
+            .iter()
+            .any(|difference| difference.severity == "error"),
+        local,
+        peer,
+        differences,
+    }
+}
+
+#[command]
+pub async fn compare_multiplayer_manifest(
+    path: String,
+) -> Result<MultiplayerManifestComparison, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = validate_multiplayer_manifest_path(&path, true)?;
+        let peer = load_multiplayer_manifest(&path)?;
+        let local = build_multiplayer_manifest()?;
+        Ok(compare_multiplayer_manifests(local, peer))
+    })
+    .await
+    .map_err(|error| format!("比较联机清单任务异常结束：{error}"))?
+}
+
 fn collect_profile_data_for_mod(
     mod_dir: &Path,
 ) -> Result<(Vec<PackageEntry>, Vec<NativeEntry>, AuthorProfileMetadata), String> {
@@ -4790,6 +5473,183 @@ path = "map/Server Redirector/cl_server_redirector.dll"
     }
 
     #[test]
+    fn package_tree_fingerprint_is_stable_and_detects_content_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_manifest_tree_test_{}",
+            current_timestamp()
+        ));
+        fs::create_dir_all(root.join("map")).unwrap();
+        fs::write(root.join("regulation.bin"), b"regulation").unwrap();
+        fs::write(root.join("map").join("asset.dcx"), b"asset-v1").unwrap();
+
+        let first = fingerprint_package_tree(&root).unwrap();
+        let second = fingerprint_package_tree(&root).unwrap();
+        fs::write(root.join("map").join("asset.dcx"), b"asset-v2").unwrap();
+        let changed = fingerprint_package_tree(&root).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.0, 2);
+        assert_ne!(first.2, changed.2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn sample_multiplayer_manifest() -> MultiplayerManifest {
+        let mut manifest = MultiplayerManifest {
+            schema_version: 1,
+            generated_at: "1".to_string(),
+            manager_version: "0.1.0".to_string(),
+            runtime_environment: "spacewar_seamless".to_string(),
+            network_backend: "seamless".to_string(),
+            packages: vec![MultiplayerPackageFingerprint {
+                order: 1,
+                name: "MMV and Weapons".to_string(),
+                file_count: 2,
+                total_bytes: 12,
+                tree_sha256: "PACKAGE".to_string(),
+                regulation_sha256: Some("REGULATION".to_string()),
+                zhocn_item_sha256: None,
+                zhocn_menu_sha256: None,
+            }],
+            natives: vec![MultiplayerNativeFingerprint {
+                order: 1,
+                name: "nrsc.dll".to_string(),
+                size: 10,
+                sha256: "NRSC".to_string(),
+                load_early: true,
+            }],
+            runtime_files: vec![MultiplayerFileFingerprint {
+                name: "nightreign.exe".to_string(),
+                size: 20,
+                sha256: "GAME".to_string(),
+            }],
+            seamless_settings_sha256: Some("SETTINGS".to_string()),
+            overall_sha256: String::new(),
+            warnings: Vec::new(),
+        };
+        manifest.overall_sha256 = calculate_multiplayer_manifest_sha256(&manifest).unwrap();
+        manifest
+    }
+
+    #[test]
+    fn multiplayer_manifest_comparison_detects_package_mismatch() {
+        let local = sample_multiplayer_manifest();
+        let identical = compare_multiplayer_manifests(local.clone(), local.clone());
+        assert!(identical.compatible);
+
+        let mut renamed = local.clone();
+        renamed.packages[0].name = "好友自定义目录名".to_string();
+        renamed.overall_sha256 = calculate_multiplayer_manifest_sha256(&renamed).unwrap();
+        assert_eq!(local.overall_sha256, renamed.overall_sha256);
+        let renamed_comparison = compare_multiplayer_manifests(local.clone(), renamed);
+        assert!(renamed_comparison.compatible);
+        assert!(renamed_comparison
+            .differences
+            .iter()
+            .any(|difference| difference.severity == "warning"));
+
+        let mut peer = local.clone();
+        peer.packages[0].tree_sha256 = "DIFFERENT".to_string();
+        peer.overall_sha256 = calculate_multiplayer_manifest_sha256(&peer).unwrap();
+        let comparison = compare_multiplayer_manifests(local, peer);
+
+        assert!(!comparison.compatible);
+        assert!(comparison
+            .differences
+            .iter()
+            .any(|difference| difference.category == "packages"));
+    }
+
+    #[test]
+    fn multiplayer_manifest_loader_rejects_tampered_content() {
+        let path = std::env::temp_dir().join(format!(
+            "nightreign_manifest_tamper_test_{}.json",
+            current_timestamp()
+        ));
+        let manifest = sample_multiplayer_manifest();
+        let mut value = serde_json::to_value(&manifest).unwrap();
+        value["runtimeEnvironment"] = serde_json::Value::String("steam_official".to_string());
+        fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+        let error = load_multiplayer_manifest(&path).unwrap_err();
+
+        assert!(error.contains("总体指纹与内容不一致"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn multiplayer_manifest_does_not_serialize_absolute_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_manifest_redaction_test_{}",
+            current_timestamp()
+        ));
+        let game_dir = root.join("PrivateUser").join("Game");
+        let package = root.join("PrivateUser").join("Mods").join("TestPack");
+        let native = game_dir.join("SeamlessCoop").join("nrsc.dll");
+        fs::create_dir_all(package.join("msg").join("zhocn")).unwrap();
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::write(game_dir.join("nightreign.exe"), b"game").unwrap();
+        fs::write(package.join("regulation.bin"), b"regulation").unwrap();
+        fs::write(
+            package
+                .join("msg")
+                .join("zhocn")
+                .join("item_dlc01.msgbnd.dcx"),
+            b"item",
+        )
+        .unwrap();
+        fs::write(
+            package
+                .join("msg")
+                .join("zhocn")
+                .join("menu_dlc01.msgbnd.dcx"),
+            b"menu",
+        )
+        .unwrap();
+        fs::write(&native, b"nrsc").unwrap();
+        fs::write(
+            game_dir.join("SeamlessCoop").join("nrsc_settings.ini"),
+            b"save_file_extension = co2",
+        )
+        .unwrap();
+        let plan = GeneratedProfilePlan {
+            content: String::new(),
+            network_backend: NetworkBackend::Seamless,
+            author_profile_sources: Vec::new(),
+            savefile: None,
+            start_online: Some(true),
+            selected_mod_count: 1,
+            package_count: 1,
+            native_count: 1,
+            mmv_seamless_community_count: 1,
+            regulation_files: vec![package.join("regulation.bin")],
+            zhocn_packages: vec![package.clone()],
+            packages: vec![PackageEntry {
+                path: package,
+                fields: default_package_fields(),
+            }],
+            natives: vec![NativeEntry {
+                path: native,
+                load_early: true,
+                fields: default_native_fields(true),
+            }],
+        };
+        let config = AppConfig {
+            game_path: game_dir.to_string_lossy().to_string(),
+            me3_path: String::new(),
+            launch_exe_path: String::new(),
+            runtime_environment: RuntimeEnvironment::SpacewarSeamless,
+        };
+
+        let manifest = build_multiplayer_manifest_from_plan(&plan, &config).unwrap();
+        let json = serde_json::to_string(&manifest).unwrap();
+
+        assert!(!json.contains("PrivateUser"));
+        assert!(!json.contains(&root.to_string_lossy().to_string()));
+        assert_eq!(manifest.packages[0].name, "TestPack");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn rejects_server_redirector_and_seamless_in_same_profile() {
         let natives = vec![
             NativeEntry {
@@ -4911,6 +5771,8 @@ path = "map/Server Redirector/cl_server_redirector.dll"
             mmv_seamless_community_count: 0,
             regulation_files: Vec::new(),
             zhocn_packages: Vec::new(),
+            packages: Vec::new(),
+            natives: Vec::new(),
         };
 
         let actual =
@@ -5302,5 +6164,116 @@ path = "map/Server Redirector/cl_server_redirector.dll"
             .join("menu_dlc01.msgbnd.dcx")
             .is_file());
         eprintln!("installed zhocn sample at {}", installed.path);
+    }
+
+    #[test]
+    #[ignore = "requires NIGHTREIGN_MMV_TEST_DIR, NIGHTREIGN_ZHOCN_TEST_DIR and NIGHTREIGN_GAME_TEST_DIR"]
+    fn exports_real_mmv_zhocn_multiplayer_manifest() {
+        let mmv_dir = std::env::var("NIGHTREIGN_MMV_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_MMV_TEST_DIR");
+        let zhocn_dir = std::env::var("NIGHTREIGN_ZHOCN_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_ZHOCN_TEST_DIR");
+        let game_dir = std::env::var("NIGHTREIGN_GAME_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_GAME_TEST_DIR");
+        let config = AppConfig {
+            game_path: game_dir.to_string_lossy().to_string(),
+            me3_path: String::new(),
+            launch_exe_path: String::new(),
+            runtime_environment: RuntimeEnvironment::SpacewarSeamless,
+        };
+        let (mut packages, mut natives, mut metadata) =
+            collect_profile_data_for_mod(&mmv_dir).unwrap();
+        apply_mmv_seamless_community_override(
+            &mmv_dir,
+            &packages,
+            &mut natives,
+            &mut metadata,
+            &config,
+        )
+        .unwrap();
+        let mut seen_natives = natives
+            .iter()
+            .map(|native| path_key(&native.path))
+            .collect::<BTreeSet<_>>();
+        extend_unique_natives(
+            &mut natives,
+            &mut seen_natives,
+            infer_game_root_natives(&game_dir),
+        );
+        packages.push(PackageEntry {
+            path: zhocn_dir,
+            fields: default_package_fields(),
+        });
+        let regulation_files = collect_regulation_files(&packages);
+        let zhocn_packages = collect_zhocn_packages(&packages);
+        let content = build_me3_profile(&metadata, &packages, &natives).unwrap();
+        let plan = GeneratedProfilePlan {
+            content,
+            network_backend: detect_network_backend(&natives).unwrap(),
+            author_profile_sources: metadata.source_paths.clone(),
+            savefile: metadata
+                .root_fields
+                .get("savefile")
+                .and_then(toml::Value::as_str)
+                .map(ToOwned::to_owned),
+            start_online: metadata
+                .root_fields
+                .get("start_online")
+                .and_then(toml::Value::as_bool),
+            selected_mod_count: 2,
+            package_count: packages.len(),
+            native_count: natives.len(),
+            mmv_seamless_community_count: 1,
+            regulation_files,
+            zhocn_packages,
+            packages,
+            natives,
+        };
+
+        let manifest = build_multiplayer_manifest_from_plan(&plan, &config).unwrap();
+
+        assert_eq!(manifest.runtime_environment, "spacewar_seamless");
+        assert_eq!(manifest.network_backend, "seamless");
+        assert_eq!(manifest.packages.len(), 2);
+        assert_eq!(
+            manifest.packages[0].regulation_sha256.as_deref(),
+            Some("D36B9960E19C748112F2A8D0D4C00D33A2BEC8AE9BB1707975516C3DBB64F579")
+        );
+        assert_eq!(
+            manifest.packages[1].zhocn_item_sha256.as_deref(),
+            Some("A1FF17385256E7AAD60F88F74D9292D4C11B75541EF6019BB4AB5085F52B8BC6")
+        );
+        assert_eq!(
+            manifest.packages[1].zhocn_menu_sha256.as_deref(),
+            Some("F6EEA4A210CBC6E3314998FA9001C487CEAD87081530152011B7B3BC060201D7")
+        );
+        assert!(manifest.natives.iter().any(|native| {
+            native.name.eq_ignore_ascii_case("nrsc.dll")
+                && native.load_early
+                && native.sha256
+                    == "243EEC929A97B71E1E2E3B4215778B89C37D629436B8DD5403E830593D3CE24E"
+        }));
+        let json = serde_json::to_string_pretty(&manifest).unwrap();
+        assert!(!json.contains(&game_dir.to_string_lossy().to_string()));
+        assert!(!json.contains(&mmv_dir.to_string_lossy().to_string()));
+        if let Ok(output) = std::env::var("NIGHTREIGN_MANIFEST_OUTPUT") {
+            fs::write(output, json).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the configured local Nightreign workspace"]
+    fn exports_current_workspace_multiplayer_manifest() {
+        assert_eq!(
+            std::env::var("NIGHTREIGN_VERIFY_CURRENT_WORKSPACE").as_deref(),
+            Ok("1")
+        );
+        let manifest = build_multiplayer_manifest().unwrap();
+        assert!(!manifest.packages.is_empty());
+        assert_eq!(manifest.network_backend, "seamless");
+        assert_eq!(manifest.runtime_environment, "spacewar_seamless");
     }
 }

@@ -85,6 +85,65 @@ export interface FileConflict {
   owners: ConflictOwner[];
 }
 
+export interface MultiplayerManifest {
+  schemaVersion: number;
+  generatedAt: string;
+  managerVersion: string;
+  runtimeEnvironment: string;
+  networkBackend: string;
+  packages: MultiplayerPackageFingerprint[];
+  natives: MultiplayerNativeFingerprint[];
+  runtimeFiles: MultiplayerFileFingerprint[];
+  seamlessSettingsSha256: string | null;
+  overallSha256: string;
+  warnings: string[];
+}
+
+export interface MultiplayerPackageFingerprint {
+  order: number;
+  name: string;
+  fileCount: number;
+  totalBytes: number;
+  treeSha256: string;
+  regulationSha256: string | null;
+  zhocnItemSha256: string | null;
+  zhocnMenuSha256: string | null;
+}
+
+export interface MultiplayerNativeFingerprint {
+  order: number;
+  name: string;
+  size: number;
+  sha256: string;
+  loadEarly: boolean;
+}
+
+export interface MultiplayerFileFingerprint {
+  name: string;
+  size: number;
+  sha256: string;
+}
+
+export interface MultiplayerManifestExport {
+  path: string;
+  manifest: MultiplayerManifest;
+}
+
+export interface MultiplayerManifestDifference {
+  severity: "error" | "warning";
+  category: string;
+  item: string;
+  local: string;
+  peer: string;
+}
+
+export interface MultiplayerManifestComparison {
+  compatible: boolean;
+  local: MultiplayerManifest;
+  peer: MultiplayerManifest;
+  differences: MultiplayerManifestDifference[];
+}
+
 export interface SpecialModStatus {
   gamePath: string;
   seamlessInstalled: boolean;

@@ -1,8 +1,13 @@
 import { useState } from "react";
-import type { FileConflict, LaunchArtifacts } from "../types/mod";
+import type {
+  FileConflict,
+  LaunchArtifacts,
+  MultiplayerManifestComparison,
+  MultiplayerManifestExport,
+} from "../types/mod";
 import { PageFrame } from "./LaunchPage";
 
-type ViewerKey = "profile" | "script" | "log" | "diagnose";
+type ViewerKey = "profile" | "script" | "log" | "diagnose" | "multiplayer";
 
 interface DiagnosticsPageProps {
   busy: boolean;
@@ -10,6 +15,8 @@ interface DiagnosticsPageProps {
   onGenerateProfile: () => Promise<{ profilePath: string; content: string } | undefined>;
   onReadArtifacts: () => Promise<LaunchArtifacts | undefined>;
   onDetectConflicts: () => Promise<FileConflict[] | undefined>;
+  onExportMultiplayerManifest: () => Promise<MultiplayerManifestExport | undefined>;
+  onCompareMultiplayerManifest: () => Promise<MultiplayerManifestComparison | undefined>;
   onToast: (message: string) => void;
 }
 
@@ -19,6 +26,8 @@ export function DiagnosticsPage({
   onGenerateProfile,
   onReadArtifacts,
   onDetectConflicts,
+  onExportMultiplayerManifest,
+  onCompareMultiplayerManifest,
   onToast,
 }: DiagnosticsPageProps) {
   const [activeViewer, setActiveViewer] = useState<ViewerKey>("profile");
@@ -31,6 +40,10 @@ export function DiagnosticsPage({
   const [logContent, setLogContent] = useState("");
   const [conflicts, setConflicts] = useState<FileConflict[]>([]);
   const [hasAnalyzedConflicts, setHasAnalyzedConflicts] = useState(false);
+  const [multiplayerPath, setMultiplayerPath] = useState("");
+  const [multiplayerContent, setMultiplayerContent] = useState("");
+  const [multiplayerComparison, setMultiplayerComparison] =
+    useState<MultiplayerManifestComparison | null>(null);
   const visibleConflicts = conflicts.slice(0, 500);
 
   const runDiagnose = async () => {
@@ -71,6 +84,26 @@ export function DiagnosticsPage({
     }
   };
 
+  const exportManifest = async () => {
+    const result = await onExportMultiplayerManifest();
+    if (result) {
+      setMultiplayerPath(result.path);
+      setMultiplayerContent(JSON.stringify(result.manifest, null, 2));
+      setMultiplayerComparison(null);
+      setActiveViewer("multiplayer");
+    }
+  };
+
+  const compareManifest = async () => {
+    const result = await onCompareMultiplayerManifest();
+    if (result) {
+      setMultiplayerPath(result.compatible ? "双方清单一致" : "双方清单存在差异");
+      setMultiplayerContent(formatMultiplayerComparison(result));
+      setMultiplayerComparison(result);
+      setActiveViewer("multiplayer");
+    }
+  };
+
   const viewer = getViewerState(activeViewer, {
     diagnosticOutput,
     profilePath,
@@ -79,6 +112,8 @@ export function DiagnosticsPage({
     scriptContent,
     logPath,
     logContent,
+    multiplayerPath,
+    multiplayerContent,
   });
 
   const copyText = async (text: string) => {
@@ -107,6 +142,31 @@ export function DiagnosticsPage({
               <ActionButton disabled={busy} label="读取脚本和日志" onClick={refreshArtifacts} />
               <ActionButton disabled={busy} label="启动游戏并诊断" onClick={runDiagnose} />
             </div>
+          </section>
+
+          <section className="panel-card rounded-xl p-4">
+            <h2 className="text-base font-semibold text-text-primary">双方联机一致性</h2>
+            <p className="mt-2 text-xs leading-5 text-text-muted">
+              导出脱敏指纹，比较游戏、Spacewar、Seamless DLL、设置、完整 package 内容与加载顺序。
+              大型整合首次读取可能需要 1–2 分钟。
+            </p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+              <ActionButton disabled={busy} label="导出本机清单" onClick={exportManifest} />
+              <ActionButton disabled={busy} label="比较好友清单" onClick={compareManifest} />
+            </div>
+            {multiplayerComparison && (
+              <div
+                className={`mt-3 rounded-lg border p-3 text-xs leading-5 ${
+                  multiplayerComparison.compatible
+                    ? "border-success/25 bg-success/10 text-success"
+                    : "border-warning/30 bg-warning/10 text-warning"
+                }`}
+              >
+                {multiplayerComparison.compatible
+                  ? "关键文件、设置和加载顺序一致，可以进入双端游戏验收。"
+                  : `发现 ${multiplayerComparison.differences.filter((item) => item.severity === "error").length} 项阻断差异；先修正后再联机。`}
+              </div>
+            )}
           </section>
 
           <section className="panel-card flex min-h-0 flex-1 flex-col rounded-xl">
@@ -209,6 +269,7 @@ const viewerTabs: Array<{ key: ViewerKey; label: string }> = [
   { key: "script", label: "脚本" },
   { key: "log", label: "日志" },
   { key: "diagnose", label: "诊断输出" },
+  { key: "multiplayer", label: "联机清单" },
 ];
 
 function ActionButton({
@@ -242,9 +303,18 @@ function getViewerState(
     scriptContent: string;
     logPath: string;
     logContent: string;
+    multiplayerPath: string;
+    multiplayerContent: string;
   }
 ) {
   switch (activeViewer) {
+    case "multiplayer":
+      return {
+        title: "双方联机一致性",
+        path: data.multiplayerPath,
+        content: data.multiplayerContent,
+        empty: "尚未导出或比较联机清单。",
+      };
     case "script":
       return {
         title: "launch-nightreign.bat",
@@ -275,4 +345,24 @@ function getViewerState(
         empty: "尚未生成 ME3 profile 预览。",
       };
   }
+}
+
+function formatMultiplayerComparison(result: MultiplayerManifestComparison) {
+  const errors = result.differences.filter((item) => item.severity === "error");
+  const warnings = result.differences.filter((item) => item.severity === "warning");
+  const lines = [
+    result.compatible ? "结论：双方关键内容一致" : "结论：双方存在阻断差异",
+    `本机总体指纹：${result.local.overallSha256}`,
+    `好友总体指纹：${result.peer.overallSha256}`,
+    `阻断差异：${errors.length}；提醒：${warnings.length}`,
+  ];
+  for (const difference of result.differences) {
+    lines.push(
+      "",
+      `[${difference.severity === "error" ? "阻断" : "提醒"}] ${difference.category} / ${difference.item}`,
+      `本机：${difference.local}`,
+      `好友：${difference.peer}`
+    );
+  }
+  return lines.join("\n");
 }

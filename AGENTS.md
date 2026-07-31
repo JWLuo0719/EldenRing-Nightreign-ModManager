@@ -234,6 +234,8 @@ load_before = []
 - package/native 去重时必须保留顺序，不能改成纯排序输出，否则会破坏 profile 加载顺序。
 - 外部 MMV 作者 Profile 可以显式选择 `mmv_seamless_community` 社区兼容模式。它不是作者官方支持路线，只能在生成的 `active-nightreign.me3` 副本中移除 `cl_server_redirector.dll`，再使用游戏目录现有的 `SeamlessCoop\nrsc.dll`；原 `.me3`、DLL、package 和 `regulation.bin` 必须保持只读。该模式只允许明确的 Steam + Seamless 或 Spacewar + Seamless 环境，并要求恰好一个 package 根级 `regulation.bin`。
 - MMV 社区兼容模式的启动前检查必须显示玩法 `regulation.bin` 和简中 `item/menu_dlc01.msgbnd.dcx` 的 SHA-256；完整 `msg\zhocn` 覆盖层只能启用一份。602 与 559 覆盖同一文本集合，不得同时启用。602 当前主文件上传于 2026-07-22（314 KB），Changelog 明确标注同步 2.1.7.1；页面顶部仍显示 2.1.6，因此版本判断应同时记录上传日期、Changelog 和文件哈希，不能只读顶部版本号。
+- 双方联机一致性清单必须脱敏，不得包含绝对路径、Windows 用户名、账号目录或存档内容。比较范围包括 package 完整目录树 SHA-256、package/native 加载顺序、`regulation.bin`、完整简中层、native 的 `load_early`、游戏/Spacewar 关键二进制和 `nrsc_settings.ini` 指纹。`OnlineFix.ini`、`steam_emu.ini` 可能包含本机身份信息，不进入清单。
+- 大型 package 清单通过 blocking worker 读取完整内容；当前 2.74 GB MMV + Weapons 实测约需 81 秒。不得用目录修改时间或文件名代替内容哈希来宣称双方一致；未来增加缓存时，缓存键也必须能证明文件内容未变化。
 
 ## 已实现功能
 
@@ -249,6 +251,7 @@ load_before = []
 - ZIP 的单根目录剥离只能移除真实包装目录；`parts`、`chr`、`map`、`msg`、`zhocn` 等游戏语义根和单个 `regulation.bin` 必须保留。完整汉化若以 `zhocn\item/menu_dlc01.msgbnd.dcx` 或两个文件直接位于压缩包根提供，安装时规范到 `msg\zhocn\`；多套或半套布局应取消安装，不能猜覆盖顺序。
 - Rust 后端：配置读写、Mod 扫描、profile JSON 存储、ME3 profile 生成、bat 启动脚本、启动日志。
 - 诊断页已支持生成/查看 profile、启动脚本、日志、启动诊断和真实文件级冲突分析。
+- 诊断页已支持导出和比较脱敏联机清单：同一总体指纹表示双方关键 package、DLL、加载顺序、游戏运行时与 Seamless 设置一致；导入文件超过 2 MB、schema 不支持或总体指纹与内容不符时会拒绝。
 - 启动台已支持不会真正启动游戏的启动前检查，检查游戏/ME3/启动目标、Steam、残留进程、联机组件、深夜解锁和启用 Mod；`error` 阻止启动，`warning` 只提醒。
 - 配置方案页已支持拖拽调整已记录 Mod 的加载顺序。
 - `last-launch.log` 超过 2 MB 时轮转为 `last-launch.log.1`；诊断页最多读取日志末尾 512 KB，避免把无限增长的日志整体复制进 WebView。
@@ -266,7 +269,7 @@ load_before = []
 
 后续功能方向：
 
-- 导出并比较联机双方的 Mod 清单、文件指纹和加载顺序，降低“双方看到不同敌人/模型”的排障成本。
+- 为联机清单增加增量缓存、进度与取消，并在真实双端测试后补充一键修复建议；现有实现已经能精确列出 package、DLL、玩法参数、中文层、运行时文件和 Seamless 设置差异。
 - 对安装包结构、缺失依赖、无法识别的文件类型给出明确健康提示，避免只显示“已启用”却实际未生效。
 - 支持更直观的 Mod 添加/移出方案和批量状态更新。
 - 为大型 Mod 扫描和冲突检测增加进度、取消与增量缓存。

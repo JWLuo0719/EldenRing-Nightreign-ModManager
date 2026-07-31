@@ -197,6 +197,20 @@ Game\SeamlessCoop\nrsc.dll：
 这些哈希只描述本机当前样本，不代表官方固定版本。实际联机双方仍应比较各自生成的
 清单；上游更新后哈希变化是正常的，但必须双方一致。
 
+2026-07-31 管理器已用这套真实文件生成第一份完整脱敏联机清单：
+
+```text
+总体 SHA-256：4AEAC4B791976335C1CD44C0F608BF6585072373C7194156004D232D27DD1BF0
+MMV + Weapons package tree：ECCCD4F2614E7F364F169A64B1EFEE7CB1ED6F08D8E53660C46EB736FA9A3F72
+602 package tree：3790898ACC858DFBD8FC6E4AECB64D0391573FAA4E0FA4FB0492C2D358000219
+nrsc_settings.ini：BAA9526B44EB4DA051AC701B2829DA63316CFC5A8FF49348CA07ABF7139920AB
+```
+
+清单同时包含已有的 regulation、602 item/menu、nrsc.dll 指纹、early-load、四个
+运行时文件和顺序，但不包含绝对路径、账号目录或存档。MMV 完整目录读取约 81 秒；
+不要因为计算较慢改成只比较文件名。第二位玩家需要在自己的机器导出 JSON，然后
+双方分别在诊断页选择对方清单；只有两边都显示无阻断差异后，才进入真实联机验收。
+
 ### 旧 NightreignPLUS 5.30
 
 ```text
@@ -365,6 +379,8 @@ Nexus Cookie、账号、API Key 或在线下载权限。
 - 上次 regulation 指纹记录与人物/装备兼容风险提示；
 - OnlineFix 补丁事务备份和恢复；
 - 文件级同名冲突分析。
+- 脱敏联机清单导出、好友清单导入、完整 package 树与加载顺序比较；
+- 清单 schema/大小/内容指纹校验，损坏或手工篡改会拒绝；
 - 外部作者 Profile 的显式社区 Seamless 兼容开关；
 - 生成副本转换，原 `.me3`、DLL 和 package 保持只读；
 - 唯一 `regulation.bin` 门禁和 SHA-256；
@@ -376,8 +392,8 @@ Nexus Cookie、账号、API Key 或在线下载权限。
 
 本专项后续需要新增：
 
-- 方案级关键文件哈希清单；
-- 双方联机清单比较；
+- 联机清单大型目录进度、取消与可靠缓存；
+- 第二位真实玩家的清单互换和同房验收；
 - 中文覆盖层来源/版本元数据，而不只依赖目录结构与哈希；
 - 可选的 4–6 人修复独立方案（只有获得合法文件和当前版本实测后）。
 

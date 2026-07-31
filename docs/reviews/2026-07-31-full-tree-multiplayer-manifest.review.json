@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 2,
+  "id": "elden-ring-nightreign-mod-manager-20260731-full-tree-multiplayer-manifest",
+  "projectId": "elden-ring-nightreign-mod-manager",
+  "project": "Elden Ring Nightreign Mod Manager",
+  "date": "2026-07-31",
+  "type": "delivery",
+  "title": "联机 Mod 一致性要比较完整内容树和加载语义，而不是只列目录名",
+  "summary": "管理器新增脱敏联机清单导出与好友清单比较，并用 2.74 GB 的 MMV + Weapons、602 中文和 Seamless 真实目录完成全量验证。清单用完整 package 树、关键文件、DLL early-load、运行时与设置指纹证明双方是否一致，同时不暴露个人路径、账号或存档。",
+  "problem": "更多地图、敌人和武器包含上千个资源文件；双方即使 Mod 文件夹名称相同，也可能因 hotfix、漏文件、中文覆盖、regulation、DLL 版本或加载顺序不同而看到不同敌人、模型和武器。仅导出名称和版本无法证明可联机。",
+  "symptoms": [
+    "MMV 顶层名称不变时，Hotfix 或单文件变化无法从目录列表发现。",
+    "regulation.bin 相同不代表地图、角色、特效和武器资产完整一致。",
+    "DLL 哈希相同但 load_early 或加载顺序不同仍可能产生不同运行结果。",
+    "直接导出绝对路径会泄露 Windows 用户名和本机目录结构。",
+    "导入 JSON 若不校验内容指纹，手工编辑或传输损坏会产生虚假的一致结论。"
+  ],
+  "rootCause": "此前管理器只有文件冲突分析和少数关键文件哈希，没有一个以生成 Profile 顺序为源、覆盖完整 package 内容、native 语义和运行环境的可交换事实模型。跨项目 manifest 经验强调哈希与完整性，但 Nightreign 还需要处理超大资源树、ME3 顺序、Seamless 设置和隐私边界。",
+  "solution": [
+    "以当前生成的 Profile plan 为清单源，按真实 package/native 顺序导出，不重新按名称排序。",
+    "递归读取每个 package 的全部普通文件，按规范化相对路径排序，再把路径、大小和单文件 SHA-256 汇总为目录树指纹。",
+    "单独记录 regulation.bin、602 item/menu、native SHA-256 与 load_early，便于把总体差异定位到玩法、翻译或 DLL。",
+    "加入 nightreign.exe、OnlineFix64.dll、winmm.dll、steam_api64.dll 和 nrsc_settings.ini 指纹，覆盖 Spacewar + Seamless 运行时。",
+    "清单排除绝对路径、用户名、账号目录、存档、OnlineFix.ini 与 steam_emu.ini；后二者可能含本机身份数据。",
+    "导入前限制 2 MB、验证 schema，并重新计算排除时间戳和管理器版本的总体指纹；损坏或手工改写直接拒绝。",
+    "比较结果把 package/native 顺序、玩法参数、中文层、运行时和 Seamless 设置差异标为阻断；仅管理器版本差异为提醒。",
+    "完整扫描放入 blocking worker，并在界面提示 2.7 GB 真实包首次可能需要 1–2 分钟。"
+  ],
+  "verification": [
+    "真实 MMV + Weapons package 共 1439 个文件、2740381704 bytes，完整树 SHA-256 为 ECCCD4F2614E7F364F169A64B1EFEE7CB1ED6F08D8E53660C46EB736FA9A3F72。",
+    "真实 602 package 共 2 个文件、324608 bytes，完整树 SHA-256 为 3790898ACC858DFBD8FC6E4AECB64D0391573FAA4E0FA4FB0492C2D358000219。",
+    "真实整合清单总体 SHA-256 为 4AEAC4B791976335C1CD44C0F608BF6585072373C7194156004D232D27DD1BF0，JSON 2310 bytes；两次完整扫描分别约 81 秒和 65 秒。显示目录名已从总体语义指纹中排除。",
+    "清单确认 regulation、602 item/menu 和 nrsc.dll 哈希等于此前独立样本证据，且 nrsc.dll 为 early-load。",
+    "序列化结果通过驱动器路径正则检查，没有绝对路径；单元测试也用 PrivateUser 路径验证脱敏。",
+    "单元测试覆盖目录树内容变化、相同清单、package 差异和篡改总体指纹拒绝。",
+    "React/Vite 构建与 Rust 测试编译已通过，最终全量 lint/clippy/test 在提交前执行。"
+  ],
+  "mistakes": [
+    "只比较目录名、Mod 显示版本或 regulation.bin，会漏掉地图、敌人、模型、特效和武器资产差异。",
+    "把完整文件列表连同绝对根路径直接导出，会泄露个人目录且让不同安装位置产生伪差异。",
+    "把生成时间或管理器版本纳入总体内容指纹，会让相同方案每次导出都不同。",
+    "为了速度只依赖修改时间，不能证明双方文件内容一致。",
+    "把本机自比较通过描述成已经完成双人联机验收；真实第二台客户端仍需互换清单并进入同一房间。"
+  ],
+  "tags": [
+    "Nightreign",
+    "Spacewar",
+    "SeamlessCoop",
+    "multiplayer",
+    "manifest",
+    "sha256",
+    "加载顺序",
+    "隐私脱敏",
+    "真实样本",
+    "Tauri"
+  ],
+  "reusability": "high",
+  "articleScore": 91,
+  "privacy": "public",
+  "status": "inbox",
+  "reuseCount": 0,
+  "appliedIn": [],
+  "supersedes": [],
+  "contradicts": [],
+  "articleAngle": "两边 Mod 名字一样为什么仍会不同步：用 2.7 GB 内容树指纹证明联机一致性",
+  "source": {
+    "threadId": "019fb41c-49bf-7062-b8b2-a87b14b3e789",
+    "commit": "",
+    "files": [
+      "app/src-tauri/src/commands/mod_manager.rs",
+      "app/src/pages/DiagnosticsPage.tsx",
+      "app/src/hooks/useModManager.ts",
+      "app/src/types/mod.ts",
+      "docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md"
+    ]
+  }
+}
