@@ -16,6 +16,7 @@ const MAX_LAUNCH_LOG_READ_BYTES: u64 = 512 * 1024;
 const MAX_CONFLICT_FILES_SCANNED: usize = 500_000;
 const MAX_CONFLICT_RESULTS: usize = 10_000;
 const MAX_SCAN_DEPTH: usize = 64;
+const MAX_CLOTHING_SCAN_FILES: usize = 100_000;
 const MAX_MULTIPLAYER_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const RECOMMENDED_ME3_VERSION: (u32, u32, u32) = (0, 12, 1);
 const OFFICIAL_MOD_SAVEFILE: &str = "NR0000.nmm";
@@ -47,6 +48,39 @@ pub struct ModInfo {
     pub start_online: Option<bool>,
     #[serde(rename = "profileMode")]
     pub profile_mode: ExternalProfileMode,
+    #[serde(rename = "pathAvailable")]
+    pub path_available: bool,
+    #[serde(default)]
+    pub clothing: ClothingModInfo,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalModRelinkResult {
+    pub old_mod_id: String,
+    pub new_mod_id: String,
+    pub path: String,
+    pub enabled: bool,
+    pub clothing: ClothingModInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClothingModInfo {
+    pub detected: bool,
+    pub kind: String,
+    pub part_file_count: usize,
+    pub local_part_file_count: usize,
+    pub online_part_file_count: usize,
+    pub paired_part_file_count: usize,
+    pub missing_online_part_count: usize,
+    pub orphan_online_part_count: usize,
+    pub has_regulation: bool,
+    pub has_manual_online_setup: bool,
+    pub online_support: String,
+    pub requires_appearance_reset: bool,
+    pub appearance_ids: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +88,8 @@ pub struct ModInfo {
 pub struct ModInstallResult {
     pub path: String,
     pub zhocn_layout_normalized: bool,
+    pub enabled: bool,
+    pub clothing: ClothingModInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -587,6 +623,7 @@ fn parse_mod_folder(path: &Path, enabled: bool) -> Option<ModInfo> {
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
     let profile_summary = inspect_author_profile(path);
+    let clothing = analyze_clothing_mod(path);
 
     Some(ModInfo {
         id: id.clone(),
@@ -605,6 +642,8 @@ fn parse_mod_folder(path: &Path, enabled: bool) -> Option<ModInfo> {
         savefile: profile_summary.savefile.unwrap_or_default(),
         start_online: profile_summary.start_online,
         profile_mode: ExternalProfileMode::Author,
+        path_available: true,
+        clothing,
     })
 }
 
@@ -646,6 +685,8 @@ fn parse_native_file(path: &Path, source: &str) -> Option<ModInfo> {
         savefile: String::new(),
         start_online: None,
         profile_mode: ExternalProfileMode::Author,
+        path_available: path.exists(),
+        clothing: ClothingModInfo::default(),
     })
 }
 
@@ -706,6 +747,8 @@ fn external_package_fallback(path: &Path, enabled: bool) -> ModInfo {
         savefile: String::new(),
         start_online: None,
         profile_mode: ExternalProfileMode::Author,
+        path_available: false,
+        clothing: analyze_clothing_mod(path),
     }
 }
 
@@ -713,12 +756,12 @@ fn external_native_fallback(path: &Path, enabled: bool) -> ModInfo {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("External DLL")
+        .unwrap_or("外部功能插件")
         .to_string();
     ModInfo {
         id: external_id("native", path),
         name,
-        description: "外部 DLL 未找到或无法解析".to_string(),
+        description: "外部功能插件未找到或无法解析".to_string(),
         version: String::new(),
         author: String::new(),
         enabled,
@@ -735,6 +778,8 @@ fn external_native_fallback(path: &Path, enabled: bool) -> ModInfo {
         savefile: String::new(),
         start_online: None,
         profile_mode: ExternalProfileMode::Author,
+        path_available: false,
+        clothing: ClothingModInfo::default(),
     }
 }
 
@@ -886,56 +931,138 @@ fn install_mod_from_zip_blocking(zip_path: &str) -> Result<ModInstallResult, Str
         .to_string_lossy()
         .to_string();
 
-    let extract_dir = unique_destination(&mods_dir.join(sanitize_folder_name(&file_name)));
-    fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
+    let staging_dir =
+        unique_destination(&mods_dir.join(format!(".installing-{}", current_timestamp())));
+    fs::create_dir_all(&staging_dir).map_err(|e| e.to_string())?;
 
-    let zhocn_layout_normalized = extract_zip(zip_path, &extract_dir)
-        .and_then(|_| normalize_zhocn_layout(&extract_dir))
+    let zhocn_layout_normalized = extract_zip(zip_path, &staging_dir)
+        .and_then(|_| normalize_zhocn_layout(&staging_dir))
         .inspect_err(|_| {
-            let _ = fs::remove_dir_all(&extract_dir);
+            let _ = fs::remove_dir_all(&staging_dir);
         })?;
 
+    let clothing = analyze_clothing_mod(&staging_dir);
+    let enabled = safe_initial_mod_enabled(&clothing);
+    let sanitized_name = sanitize_folder_name(strip_disabled_suffix(&file_name));
+    let destination = unique_mod_destination(&mods_dir, &sanitized_name, enabled);
+    fs::rename(&staging_dir, &destination)
+        .inspect_err(|_| {
+            let _ = fs::remove_dir_all(&staging_dir);
+        })
+        .map_err(|error| format!("完成 Mod 安装失败：{error}"))?;
+
     Ok(ModInstallResult {
-        path: extract_dir.to_string_lossy().to_string(),
+        path: destination.to_string_lossy().to_string(),
         zhocn_layout_normalized,
+        enabled,
+        clothing,
     })
 }
 
 #[command]
-pub fn add_external_mod(path: String) -> Result<(), String> {
+pub fn add_external_mod(path: String) -> Result<ModInstallResult, String> {
     let mod_path =
         fs::canonicalize(Path::new(path.trim())).map_err(|e| format!("外部 Mod 目录无效：{e}"))?;
     if !mod_path.is_dir() {
         return Err("外部 Mod 必须选择文件夹".to_string());
     }
 
+    let clothing = analyze_clothing_mod(&mod_path);
     let mut config = load_external_mods_config();
     let normalized = normalize_windows_path_string(&mod_path.to_string_lossy());
-    if !config
+    let enabled = if let Some(existing) = config
         .packages
         .iter()
-        .any(|entry| same_path_string(&entry.path, &normalized))
+        .find(|entry| same_path_string(&entry.path, &normalized))
     {
+        existing.enabled
+    } else {
+        let enabled = safe_initial_mod_enabled(&clothing);
         config.packages.push(ExternalModEntry {
-            path: normalized,
-            enabled: true,
+            path: normalized.clone(),
+            enabled,
             profile_mode: ExternalProfileMode::Author,
         });
+        enabled
+    };
+    save_external_mods_config(&config)?;
+
+    Ok(ModInstallResult {
+        path: normalized,
+        zhocn_layout_normalized: false,
+        enabled,
+        clothing,
+    })
+}
+
+#[command]
+pub fn relink_external_mod(
+    mod_id: String,
+    path: String,
+) -> Result<ExternalModRelinkResult, String> {
+    let mod_path = fs::canonicalize(Path::new(path.trim()))
+        .map_err(|error| format!("新的外部 Mod 目录无效：{error}"))?;
+    if !mod_path.is_dir() {
+        return Err("请重新选择这个 Mod 的文件夹，而不是单个文件".to_string());
     }
-    save_external_mods_config(&config)
+
+    let mut config = load_external_mods_config();
+    let original_config = config.clone();
+    let old_index = config
+        .packages
+        .iter()
+        .position(|entry| external_id("package", Path::new(&entry.path)) == mod_id)
+        .ok_or_else(|| "没有找到需要重新定位的外部 Mod 记录".to_string())?;
+    let old_mod_id = external_id("package", Path::new(&config.packages[old_index].path));
+    let normalized = normalize_windows_path_string(&mod_path.to_string_lossy());
+    let new_mod_id = external_id("package", &mod_path);
+    let old_entry = config.packages[old_index].clone();
+
+    if let Some(existing_index) = config
+        .packages
+        .iter()
+        .enumerate()
+        .find_map(|(index, entry)| {
+            (index != old_index && same_path_string(&entry.path, &normalized)).then_some(index)
+        })
+    {
+        config.packages[existing_index].enabled |= old_entry.enabled;
+        config.packages.remove(old_index);
+    } else {
+        config.packages[old_index].path = normalized.clone();
+    }
+    save_external_mods_config(&config)?;
+
+    if let Err(error) = profile::replace_mod_id_in_all_profiles(&old_mod_id, &new_mod_id) {
+        let _ = save_external_mods_config(&original_config);
+        return Err(format!("已撤销路径修改，因为同步配置方案失败：{error}"));
+    }
+
+    let entry = config
+        .packages
+        .iter()
+        .find(|entry| same_path_string(&entry.path, &normalized))
+        .ok_or_else(|| "重新定位后无法读取外部 Mod 记录".to_string())?;
+    Ok(ExternalModRelinkResult {
+        old_mod_id,
+        new_mod_id,
+        path: normalized,
+        enabled: entry.enabled,
+        clothing: analyze_clothing_mod(&mod_path),
+    })
 }
 
 #[command]
 pub fn add_external_dll(path: String) -> Result<(), String> {
-    let dll_path =
-        fs::canonicalize(Path::new(path.trim())).map_err(|e| format!("外部 DLL 无效：{e}"))?;
+    let dll_path = fs::canonicalize(Path::new(path.trim()))
+        .map_err(|e| format!("外部功能插件（DLL）无效：{e}"))?;
     if !dll_path.is_file()
         || !dll_path
             .extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
     {
-        return Err("请选择 .dll 文件".to_string());
+        return Err("请选择功能插件 .dll 文件".to_string());
     }
 
     let mut config = load_external_mods_config();
@@ -981,12 +1108,21 @@ pub fn toggle_external_mod(mod_id: String, enabled: bool) -> Result<(), String> 
 
     for entry in &mut config.packages {
         if external_id("package", Path::new(&entry.path)) == mod_id {
+            if enabled && !Path::new(&entry.path).is_dir() {
+                return Err(
+                    "这个外部 Mod 的原文件夹已经不存在。请先使用“重新定位”选择它现在所在的文件夹。"
+                        .to_string(),
+                );
+            }
             entry.enabled = enabled;
             found = true;
         }
     }
     for entry in &mut config.natives {
         if external_id("native", Path::new(&entry.path)) == mod_id {
+            if enabled && !Path::new(&entry.path).is_file() {
+                return Err("这个外部功能插件已经不存在。请移除旧记录后重新添加 DLL。".to_string());
+            }
             entry.enabled = enabled;
             found = true;
         }
@@ -1205,6 +1341,26 @@ fn unique_destination(base: &Path) -> PathBuf {
     parent.join(format!("{name}_{}", current_timestamp()))
 }
 
+fn unique_mod_destination(mods_dir: &Path, name: &str, enabled: bool) -> PathBuf {
+    let suffix = if enabled { "" } else { ".disabled" };
+    if mod_destination_slot_available(mods_dir, name) {
+        return mods_dir.join(format!("{name}{suffix}"));
+    }
+
+    for index in 1..1000 {
+        let candidate_name = format!("{name}_{index}");
+        if mod_destination_slot_available(mods_dir, &candidate_name) {
+            return mods_dir.join(format!("{candidate_name}{suffix}"));
+        }
+    }
+
+    mods_dir.join(format!("{name}_{}{suffix}", current_timestamp()))
+}
+
+fn mod_destination_slot_available(mods_dir: &Path, name: &str) -> bool {
+    !mods_dir.join(name).exists() && !mods_dir.join(format!("{name}.disabled")).exists()
+}
+
 fn sanitize_folder_name(name: &str) -> String {
     let sanitized: String = name
         .chars()
@@ -1282,7 +1438,7 @@ fn validate_direct_child(managed_root: &Path, candidate: &Path) -> Result<PathBu
     }
 
     if !candidate.is_dir() && !is_dll_or_disabled_dll(&candidate) {
-        return Err("拒绝操作：目标必须是 Mod 文件夹或 DLL".to_string());
+        return Err("拒绝操作：目标必须是 Mod 文件夹或功能插件 DLL".to_string());
     }
 
     Ok(candidate)
@@ -1315,6 +1471,13 @@ fn build_generated_profile_plan() -> Result<GeneratedProfilePlan, String> {
 
     for mod_info in selected_mods {
         let mod_dir = Path::new(&mod_info.path);
+        if !mod_dir.exists() {
+            return Err(format!(
+                "已启用的“{}”找不到原文件夹：{}。请到 Mod 仓库使用“重新定位”，或先停用这条记录。",
+                mod_info.name,
+                mod_dir.to_string_lossy()
+            ));
+        }
         let (mod_packages, mut mod_natives, mut mod_metadata) =
             collect_profile_data_for_mod(mod_dir)?;
         if mod_info.profile_mode == ExternalProfileMode::MmvSeamlessCommunity {
@@ -1446,7 +1609,7 @@ fn validate_save_filename(filename: &str) -> Result<(), String> {
         || path.file_name().and_then(|name| name.to_str()) != Some(filename)
     {
         return Err(format!(
-            "Profile 的 savefile 不是安全的单文件名，已阻止启动：{filename}"
+            "启动配置（Profile）的存档文件名不安全，已阻止启动：{filename}"
         ));
     }
     Ok(())
@@ -1609,21 +1772,21 @@ fn assess_gameplay_save_compatibility(
             (
                 "pass",
                 format!(
-                    "找到 {existing_save_count} 份 {savefile}；当前 regulation.bin 与上次管理器启动记录一致（SHA-256={current}）。启动前仍会执行哈希回读备份。"
+                    "找到 {existing_save_count} 份 {savefile}；当前玩法数据文件（regulation.bin）与上次管理器启动记录一致（SHA-256={current}）。启动前仍会执行哈希回读备份。"
                 ),
             )
         }
         (Some(current), Some(previous)) if previous.savefile.eq_ignore_ascii_case(savefile) => (
             "warning",
             format!(
-                "找到 {existing_save_count} 份 {savefile}，但当前 regulation.bin（SHA-256={current}）与上次管理器启动记录（{}）不同。旧存档可能保留已变化的武器/装备 ID，表现为人物或武器不显示。请改回匹配方案，或在保留备份后用新角色验证；Profile 的 savefile 不能隔离 Seamless 存档。",
-                previous.regulation_sha256.as_deref().unwrap_or("无 regulation.bin")
+                "找到 {existing_save_count} 份 {savefile}，但当前玩法数据文件（regulation.bin，SHA-256={current}）与上次管理器启动记录（{}）不同。旧存档可能保留已变化的武器、装备或服装 ID，表现为人物或武器不显示。请改回匹配方案，或在保留备份后用新角色验证；启动配置中的 savefile 不能隔离 Seamless 存档。",
+                previous.regulation_sha256.as_deref().unwrap_or("无玩法数据文件")
             ),
         ),
         (Some(current), _) => (
             "warning",
             format!(
-                "找到 {existing_save_count} 份来源未知的 {savefile}；当前 regulation.bin SHA-256={current}。旧存档若来自另一套地图/武器参数，可能出现人物或装备不显示。启动前会哈希回读备份；建议先用新角色验证。"
+                "找到 {existing_save_count} 份来源未知的 {savefile}；当前玩法数据文件（regulation.bin）SHA-256={current}。旧存档若来自另一套地图、武器或服装参数，可能出现人物或装备不显示。启动前会哈希回读备份；建议先用新角色验证。"
             ),
         ),
         (None, Some(previous))
@@ -1633,14 +1796,14 @@ fn assess_gameplay_save_compatibility(
             (
                 "warning",
                 format!(
-                    "找到 {existing_save_count} 份 {savefile}，但当前方案没有 regulation.bin，上次管理器启动记录包含玩法参数。移除地图/武器参数后继续旧存档可能导致人物或装备不显示。"
+                    "找到 {existing_save_count} 份 {savefile}，但当前方案没有玩法数据文件（regulation.bin），上次管理器启动记录包含自定义玩法参数。移除地图、武器或扩展服装后继续旧存档可能导致人物或装备不显示。"
                 ),
             )
         }
         (None, _) => (
             "pass",
             format!(
-                "找到 {existing_save_count} 份 {savefile}；当前方案没有自定义 regulation.bin。启动前会执行哈希回读备份。"
+                "找到 {existing_save_count} 份 {savefile}；当前方案没有自定义玩法数据文件（regulation.bin）。启动前会执行哈希回读备份。"
             ),
         ),
     }
@@ -1867,7 +2030,7 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                     NetworkBackend::Seamless => {
                         "SeamlessCoop；nrsc.dll 将 early load，nighter 按检测结果加载".to_string()
                     }
-                    NetworkBackend::None => "未加载联机 DLL；适用于离线 Mod 方案".to_string(),
+                    NetworkBackend::None => "未加载联机功能插件；适用于离线 Mod 方案".to_string(),
                 },
             );
 
@@ -1898,16 +2061,16 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                         },
                         if ignored_profile_savefile {
                             format!(
-                                "作者 Profile 声明了 {}，但 Seamless 实际存档由 nrsc_settings.ini 决定；本次按真实文件 {savefile} 备份。不要把 Profile 的 savefile 当作 Spacewar/Seamless 存档隔离。",
+                                "作者启动配置声明了 {}，但 Seamless 实际存档由 nrsc_settings.ini 决定；本次按真实文件 {savefile} 备份。不要把 Profile 的 savefile 当作 Spacewar/Seamless 存档隔离。",
                                 plan.savefile.as_deref().unwrap_or_default()
                             )
                         } else if plan.network_backend == NetworkBackend::ServerRedirector
                             && savefile.eq_ignore_ascii_case("NR0000.co2")
                         {
-                            "当前作者 Profile 使用 NR0000.co2，与 Seamless 默认存档同名；它不是独立存档。每次启动前会自动备份，但切换方案前仍应确认存档用途。".to_string()
+                            "当前作者启动配置使用 NR0000.co2，与 Seamless 默认存档同名；它不是独立存档。每次启动前会自动备份，但切换方案前仍应确认存档用途。".to_string()
                         } else if seamless_runtime {
                             format!(
-                                "Seamless 实际使用 {savefile}（由 nrsc_settings.ini 决定）；Profile 的 savefile 不提供额外隔离。启动前会执行哈希回读备份。"
+                                "Seamless 实际使用 {savefile}（由 nrsc_settings.ini 决定）；启动配置（Profile）的 savefile 不提供额外隔离。启动前会执行哈希回读备份。"
                             )
                         } else if runtime_environment == RuntimeEnvironment::SteamOfficial
                             && savefile.eq_ignore_ascii_case(OFFICIAL_MOD_SAVEFILE)
@@ -1947,7 +2110,7 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                 add_preflight_check(
                     &mut checks,
                     "author_profile",
-                    "作者 Profile",
+                    "作者启动配置",
                     "pass",
                     "当前方案没有需要继承根字段的作者 .me3".to_string(),
                 );
@@ -1960,7 +2123,7 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                 add_preflight_check(
                     &mut checks,
                     "author_profile",
-                    "作者 Profile",
+                    "作者启动配置",
                     "pass",
                     format!(
                         "已保留 {} 份作者配置；savefile={savefile}，start_online={start_online}",
@@ -1969,6 +2132,43 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                 );
             }
 
+            let (regulation_status, regulation_message) = match plan.regulation_files.as_slice() {
+                [path] => match sha256_file(path) {
+                    Ok(hash) => (
+                        "pass",
+                        format!(
+                            "当前只有一份玩法数据文件，来自“{}”；高级校验：regulation.bin SHA-256={hash}",
+                            regulation_owner_label(path)
+                        ),
+                    ),
+                    Err(error) => ("error", error),
+                },
+                [] if plan.mmv_seamless_community_count > 0 => (
+                    "error",
+                    "当前整合方案缺少玩法数据文件；地图、敌人、武器或扩展服装参数不会完整生效。"
+                        .to_string(),
+                ),
+                [] => (
+                    "pass",
+                    "当前方案没有自定义玩法数据文件；纯外观替换通常不需要它。".to_string(),
+                ),
+                paths => (
+                    "error",
+                    format!(
+                        "检测到 {} 份玩法数据文件，分别来自：{}。加载顺序只能决定最后覆盖哪一份，不能自动合并；请停用其中一个，或使用已经合并两者的兼容版本。",
+                        paths.len(),
+                        regulation_owner_labels(paths).join("、")
+                    ),
+                ),
+            };
+            add_preflight_check(
+                &mut checks,
+                "regulation_owner",
+                "玩法参数是否冲突",
+                regulation_status,
+                regulation_message,
+            );
+
             if plan.mmv_seamless_community_count > 0 {
                 add_preflight_check(
                     &mut checks,
@@ -1976,42 +2176,9 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                     "MMV Seamless 兼容",
                     "warning",
                     format!(
-                        "已对 {} 个外部 MMV 作者 Profile 启用社区兼容模式：原文件保持只读，仅在生成副本中移除 cl_server_redirector.dll，并改由游戏目录中的 nrsc.dll early load。此路线有社区与 Spacewar 实例支持，但不受 MMV 作者团队官方支持。",
+                        "已对 {} 个外部 MMV 作者启动配置启用社区兼容模式：原文件保持只读，仅在生成副本中移除 cl_server_redirector.dll，并改由游戏目录中的 nrsc.dll early load。此路线有社区与 Spacewar 实例支持，但不受 MMV 作者团队官方支持。",
                         plan.mmv_seamless_community_count
                     ),
-                );
-
-                let (regulation_status, regulation_message) =
-                    match plan.regulation_files.as_slice() {
-                        [path] => match sha256_file(path) {
-                            Ok(hash) => (
-                                "pass",
-                                format!(
-                                    "检测到唯一 regulation.bin：{}；SHA-256={hash}",
-                                    path.to_string_lossy()
-                                ),
-                            ),
-                            Err(error) => ("error", error),
-                        },
-                        [] => (
-                            "error",
-                            "没有检测到 regulation.bin；地图/敌人与武器参数不会完整生效。"
-                                .to_string(),
-                        ),
-                        paths => (
-                            "error",
-                            format!(
-                                "检测到 {} 个 regulation.bin。加载顺序只能覆盖，不能合并；请只保留一个已合并资源包。",
-                                paths.len()
-                            ),
-                        ),
-                    };
-                add_preflight_check(
-                    &mut checks,
-                    "regulation_owner",
-                    "玩法参数合并",
-                    regulation_status,
-                    regulation_message,
                 );
 
                 let (zhocn_status, zhocn_message) = match plan.zhocn_packages.as_slice() {
@@ -2067,7 +2234,7 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                         "error"
                     },
                     if profiles_outside_game {
-                        "作者 Profile 位于实际 Game 目录之外，管理器只读使用原目录".to_string()
+                        "作者启动配置位于实际 Game 目录之外，管理器只读使用原目录".to_string()
                     } else {
                         "Server Redirector 整合包位于实际 Game 目录内；请移动到 Game 目录之外后重新注册"
                             .to_string()
@@ -2078,7 +2245,7 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
         Err(error) => add_preflight_check(
             &mut checks,
             "profile_generation",
-            "Profile 兼容性",
+            "启动配置兼容性",
             "error",
             error.clone(),
         ),
@@ -2106,13 +2273,12 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
             },
             if using_server_redirector {
                 if status.seamless_installed {
-                    "已安装，但当前 MMV 方案明确不将 nrsc.dll 注入 Profile。".to_string()
+                    "已安装，但当前 MMV 方案明确不把 nrsc.dll 加入启动配置。".to_string()
                 } else {
                     "当前 MMV 方案使用 Server Redirector，不需要 SeamlessCoop。".to_string()
                 }
             } else if seamless_required && status.seamless_installed {
-                "nrsc.dll 与设置文件齐全；生成 profile 时会将 nrsc.dll 设为 early load。"
-                    .to_string()
+                "nrsc.dll 与设置文件齐全；生成启动配置时会将 nrsc.dll 设为 early load。".to_string()
             } else if seamless_required {
                 "当前环境要求 SeamlessCoop，但 nrsc.dll 或设置文件不完整。".to_string()
             } else if status.seamless_installed {
@@ -2212,18 +2378,64 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                     if enabled > 0 {
                         if let Ok(plan) = &profile_plan {
                             format!(
-                                "将加载 {} 个 Mod：{} 个资源包，{} 个 DLL",
+                                "将加载 {} 个 Mod：{} 个资源型 Mod，{} 个功能插件",
                                 plan.selected_mod_count, plan.package_count, plan.native_count
                             )
                         } else {
                             format!(
-                                "将加载 {enabled} 个 Mod：{packages} 个资源包，{natives} 个 DLL"
+                                "将加载 {enabled} 个 Mod：{packages} 个资源型 Mod，{natives} 个功能插件"
                             )
                         }
                     } else {
-                        "没有启用的 Mod；启动后只会尝试加载游戏根目录中的联机 DLL。".to_string()
+                        "没有启用的 Mod；启动后只会尝试加载游戏根目录中的联机功能插件。".to_string()
                     },
                 );
+
+                let enabled_clothing = mods
+                    .iter()
+                    .filter(|item| item.enabled && item.clothing.detected)
+                    .collect::<Vec<_>>();
+                if !enabled_clothing.is_empty() {
+                    let expanded_count = enabled_clothing
+                        .iter()
+                        .filter(|item| item.clothing.requires_appearance_reset)
+                        .count();
+                    let online_view_risks = enabled_clothing
+                        .iter()
+                        .filter(|item| {
+                            matches!(item.clothing.online_support.as_str(), "missing" | "partial")
+                        })
+                        .map(|item| item.name.as_str())
+                        .collect::<Vec<_>>();
+                    let mut message = format!(
+                        "检测到 {} 个服装 Mod；其中 {expanded_count} 个包含扩展服装数据。",
+                        enabled_clothing.len()
+                    );
+                    if expanded_count > 0 {
+                        message.push_str(
+                            " 停用或切换方案前，请先在游戏内换回本体服装，避免存档留下无效外观 ID。",
+                        );
+                    }
+                    if !online_view_risks.is_empty() {
+                        message.push_str(&format!(
+                            " 以下 Mod 的 _l 队友视角资源缺失或不完整：{}。",
+                            online_view_risks.join("、")
+                        ));
+                    } else {
+                        message.push_str(" 已找到成对的 _l 队友视角资源。");
+                    }
+                    add_preflight_check(
+                        &mut checks,
+                        "clothing_resources",
+                        "服装与队友视角",
+                        if online_view_risks.is_empty() {
+                            "pass"
+                        } else {
+                            "warning"
+                        },
+                        message,
+                    );
+                }
             }
             Err(error) => add_preflight_check(
                 &mut checks,
@@ -2267,7 +2479,7 @@ pub fn install_seamless_onlinefix(patch_game_path: String) -> Result<SpecialModS
     validate_game_dir(game_dir)?;
     if steam_manifest_for_game_dir(game_dir).is_some() {
         return Err(
-            "当前目录属于 Steam 正版安装。为防止覆盖 steam_api64.dll，管理器禁止向该目录安装 OnlineFix/Spacewar 补丁。"
+            "当前目录属于 Steam 正版安装。为防止覆盖 Steam 运行文件（steam_api64.dll），管理器禁止向该目录安装 OnlineFix/Spacewar 补丁。"
                 .to_string(),
         );
     }
@@ -2451,6 +2663,7 @@ pub fn launch_game(game_path: String, me3_path: String) -> Result<String, String
     ensure_no_running_game_processes()?;
 
     let plan = build_generated_profile_plan()?;
+    validate_single_regulation_owner(&plan)?;
     let runtime_environment = effective_runtime_environment(&config);
     validate_runtime_launch_environment(&plan, &config, Path::new(&game_path))?;
     let profile_path = write_generated_profile(&plan)?;
@@ -2486,8 +2699,7 @@ pub fn launch_game(game_path: String, me3_path: String) -> Result<String, String
     }
 
     Ok(format!(
-        "启动脚本已执行。\n脚本：{}\n日志：{}{}",
-        launch_script.to_string_lossy(),
+        "已在后台开始启动游戏。\n如未进入游戏，请在诊断页查看启动日志。\n日志：{}{}",
         get_launch_log_path().to_string_lossy(),
         save_backup.map_or_else(String::new, |path| format!(
             "\n存档备份：{}",
@@ -2520,6 +2732,7 @@ pub fn diagnose_launch_game(game_path: String, me3_path: String) -> Result<Strin
     ensure_no_running_game_processes()?;
 
     let plan = build_generated_profile_plan()?;
+    validate_single_regulation_owner(&plan)?;
     let runtime_environment = effective_runtime_environment(&config);
     validate_runtime_launch_environment(&plan, &config, Path::new(&game_path))?;
     let profile_path = write_generated_profile(&plan)?;
@@ -2630,12 +2843,15 @@ fn write_launch_script(
 fn launch_via_script(script_path: &Path) -> Result<(), String> {
     let mut command = std::process::Command::new("cmd");
     command
-        .arg("/K")
+        // /C 在 ME3 启动流程结束后自动退出；输出已写入 last-launch.log，
+        // 因此不再让玩家面对一个不会自动关闭的命令行窗口。
+        .arg("/C")
         .arg(script_path)
         .current_dir(script_path.parent().unwrap_or_else(|| Path::new(".")));
 
     #[cfg(windows)]
-    command.creation_flags(0x00000010);
+    // CREATE_NO_WINDOW：后台运行 cmd/bat，避免启动时弹出黑色终端窗口。
+    command.creation_flags(0x08000000);
 
     command
         .spawn()
@@ -2742,7 +2958,7 @@ fn validate_runtime_launch_environment(
         }
         if steam_manifest_for_game_dir(game_dir).is_none() {
             return Err(
-                "MMV Server Redirector 需要可确认的 Steam 正版安装；当前 Game 目录没有匹配的 AppManifest 2622380。"
+            "MMV Server Redirector 需要可确认的 Steam 正版安装；当前 Game 目录没有匹配的 Steam 安装记录（AppManifest 2622380）。"
                     .to_string(),
             );
         }
@@ -2759,7 +2975,7 @@ fn validate_runtime_launch_environment(
         RuntimeEnvironment::SteamOfficial => {
             if steam_manifest_for_game_dir(game_dir).is_none() {
                 return Err(
-                    "未找到与当前 Game 目录匹配的 Steam AppManifest 2622380，不能确认这是正版安装目录。"
+                    "未找到与当前 Game 目录匹配的 Steam 安装记录（AppManifest 2622380），不能确认这是正版安装目录。"
                         .to_string(),
                 );
             }
@@ -2777,7 +2993,7 @@ fn validate_runtime_launch_environment(
             }
             if plan.start_online == Some(true) {
                 return Err(
-                    "作者 Profile 请求连接在线服务器，但当前是普通正版 Mod 方案。为保留 ME3 的官方匹配保护，已阻止启动。"
+                    "作者启动配置请求连接在线服务器，但当前是普通正版 Mod 方案。为保留 ME3 的官方匹配保护，已阻止启动。"
                         .to_string(),
                 );
             }
@@ -2786,7 +3002,7 @@ fn validate_runtime_launch_environment(
         RuntimeEnvironment::SteamSeamless => {
             if steam_manifest_for_game_dir(game_dir).is_none() {
                 return Err(
-                    "未找到与当前 Game 目录匹配的 Steam AppManifest 2622380，不能确认这是正版 Seamless 安装目录。"
+                    "未找到与当前 Game 目录匹配的 Steam 安装记录（AppManifest 2622380），不能确认这是正版 Seamless 安装目录。"
                         .to_string(),
                 );
             }
@@ -2803,7 +3019,7 @@ fn validate_runtime_launch_environment(
             }
             if plan.start_online == Some(true) {
                 return Err(
-                    "正版 Seamless 方案不应解除 ME3 的官方匹配保护；请移除请求 start_online=true 的冲突 Profile。"
+                    "正版 Seamless 方案不应解除 ME3 的官方匹配保护；请移除请求 start_online=true 的冲突启动配置（Profile）。"
                         .to_string(),
                 );
             }
@@ -2976,7 +3192,7 @@ fn resolve_launch_exe(config: &AppConfig, game_dir: &Path) -> Result<PathBuf, St
         let game_exe = game_dir.join("nightreign.exe");
         validate_launch_exe(&game_exe, game_dir)?;
         append_launch_log(
-            "检测到 nrsc_launcher.exe；ME3 启动链路将改用 nightreign.exe，并通过 profile 加载 SeamlessCoop/nrsc.dll。\n",
+            "检测到 nrsc_launcher.exe；ME3 启动链路将改用 nightreign.exe，并通过启动配置（Profile）加载 SeamlessCoop/nrsc.dll。\n",
         );
         return Ok(game_exe);
     }
@@ -3041,11 +3257,11 @@ fn build_runtime_environment_status(config: &AppConfig) -> RuntimeEnvironmentSta
     }
     if let Some(manifest) = steam_manifest {
         evidence.push(format!(
-            "游戏目录与 Steam AppManifest 匹配：{}",
+            "游戏目录与 Steam 安装记录（AppManifest）匹配：{}",
             manifest.to_string_lossy()
         ));
     } else {
-        evidence.push("未确认该目录属于 Steam AppManifest 2622380".to_string());
+        evidence.push("未确认该目录属于 Steam 安装记录（AppManifest 2622380）".to_string());
     }
 
     let mut warnings = Vec::new();
@@ -3480,20 +3696,20 @@ fn collect_entries_for_mod(
 fn validate_mmv_seamless_candidate(mod_dir: &Path) -> Result<(), String> {
     let (packages, natives, metadata) = collect_profile_data_for_mod(mod_dir)?;
     if metadata.source_paths.is_empty() {
-        return Err("该外部 Mod 没有可读取的作者 .me3 Profile".to_string());
+        return Err("该外部 Mod 没有可读取的作者启动配置（.me3 Profile）".to_string());
     }
     if !natives.iter().any(|entry| {
         network_backend_for_native_path(&entry.path) == NetworkBackend::ServerRedirector
     }) {
         return Err(
-            "只允许对包含 cl_server_redirector.dll 的 MMV 作者 Profile 启用此模式".to_string(),
+            "只允许对包含 cl_server_redirector.dll 的 MMV 作者启动配置启用此模式".to_string(),
         );
     }
 
     let regulation_files = collect_regulation_files(&packages);
     if regulation_files.len() != 1 {
         return Err(format!(
-            "MMV Seamless 兼容模式要求恰好一个 regulation.bin，当前检测到 {} 个",
+            "MMV Seamless 兼容模式要求恰好一个玩法数据文件（regulation.bin），当前检测到 {} 个",
             regulation_files.len()
         ));
     }
@@ -3540,7 +3756,10 @@ fn apply_mmv_seamless_community_override(
     }
 
     if collect_regulation_files(packages).len() != 1 {
-        return Err("MMV Seamless 社区兼容模式要求单一 regulation.bin 所有者".to_string());
+        return Err(
+            "MMV Seamless 社区兼容模式要求玩法数据文件（regulation.bin）只属于一个资源型 Mod"
+                .to_string(),
+        );
     }
 
     metadata
@@ -3557,6 +3776,42 @@ fn collect_regulation_files(packages: &[PackageEntry]) -> Vec<PathBuf> {
             regulation.is_file().then_some(regulation)
         })
         .collect()
+}
+
+fn regulation_owner_label(path: &Path) -> String {
+    let parent = path.parent().unwrap_or(path);
+    let owner = if parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("mod"))
+    {
+        parent.parent().unwrap_or(parent)
+    } else {
+        parent
+    };
+    owner
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("未命名 Mod")
+        .to_string()
+}
+
+fn regulation_owner_labels(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| regulation_owner_label(path))
+        .collect()
+}
+
+fn validate_single_regulation_owner(plan: &GeneratedProfilePlan) -> Result<(), String> {
+    if plan.regulation_files.len() <= 1 {
+        return Ok(());
+    }
+    Err(format!(
+        "当前方案同时启用了 {} 份玩法数据文件，来自：{}。regulation.bin 不能靠加载顺序自动合并；请先停用其中一个，或改用已合并的兼容版本。",
+        plan.regulation_files.len(),
+        regulation_owner_labels(&plan.regulation_files).join("、")
+    ))
 }
 
 fn collect_zhocn_packages(packages: &[PackageEntry]) -> Vec<PathBuf> {
@@ -3623,13 +3878,17 @@ fn collect_manifest_tree_files(
             "联机清单扫描已停止：目录嵌套超过安全上限 {MAX_SCAN_DEPTH}"
         ));
     }
-    let entries = fs::read_dir(current)
-        .map_err(|error| format!("读取 package 失败 {}：{error}", current.display()))?;
+    let entries = fs::read_dir(current).map_err(|error| {
+        format!(
+            "读取资源型 Mod（package）失败 {}：{error}",
+            current.display()
+        )
+    })?;
     for entry in entries {
-        let entry = entry.map_err(|error| format!("读取 package 项失败：{error}"))?;
+        let entry = entry.map_err(|error| format!("读取资源型 Mod 项失败：{error}"))?;
         let file_type = entry
             .file_type()
-            .map_err(|error| format!("读取 package 文件类型失败：{error}"))?;
+            .map_err(|error| format!("读取资源型 Mod 文件类型失败：{error}"))?;
         if file_type.is_symlink() {
             return Err(format!(
                 "联机清单拒绝跟随符号链接：{}",
@@ -3647,7 +3906,7 @@ fn collect_manifest_tree_files(
             }
             let relative = path
                 .strip_prefix(root)
-                .map_err(|_| "package 文件超出根目录".to_string())?;
+                .map_err(|_| "资源型 Mod 文件超出根目录".to_string())?;
             let relative = normalize_relative_path(relative)
                 .replace('\\', "/")
                 .to_lowercase();
@@ -3663,7 +3922,7 @@ fn fingerprint_package_tree(root: &Path) -> Result<(usize, u64, String), String>
     files.sort_by(|left, right| left.0.cmp(&right.0));
     if let Some(duplicate) = files.windows(2).find(|items| items[0].0 == items[1].0) {
         return Err(format!(
-            "package 包含大小写折叠后重复的相对路径：{}",
+            "资源型 Mod（package）包含大小写折叠后重复的相对路径：{}",
             duplicate[0].0
         ));
     }
@@ -3676,7 +3935,7 @@ fn fingerprint_package_tree(root: &Path) -> Result<(usize, u64, String), String>
             .len();
         total_bytes = total_bytes
             .checked_add(size)
-            .ok_or_else(|| "package 总大小溢出".to_string())?;
+            .ok_or_else(|| "资源型 Mod 总大小溢出".to_string())?;
         let file_hash = sha256_file(path)?;
         hasher.update(relative.as_bytes());
         hasher.update([0]);
@@ -3772,7 +4031,7 @@ fn build_multiplayer_manifest_from_plan(
     ];
     if plan.regulation_files.len() != 1 {
         warnings.push(format!(
-            "当前检测到 {} 个 regulation.bin；地图、敌人和武器参数可能不完整或存在覆盖。",
+            "当前检测到 {} 个玩法数据文件（regulation.bin）；地图、敌人、武器或扩展服装参数可能不完整或存在覆盖。",
             plan.regulation_files.len()
         ));
     }
@@ -3896,7 +4155,7 @@ fn validate_multiplayer_manifest_structure(manifest: &MultiplayerManifest) -> Re
         .enumerate()
         .any(|(index, package)| package.order != index + 1)
     {
-        return Err("联机清单 package 加载顺序不连续".to_string());
+        return Err("联机一致性清单中的资源型 Mod 加载顺序不连续".to_string());
     }
     if manifest
         .natives
@@ -3904,7 +4163,7 @@ fn validate_multiplayer_manifest_structure(manifest: &MultiplayerManifest) -> Re
         .enumerate()
         .any(|(index, native)| native.order != index + 1)
     {
-        return Err("联机清单 DLL 加载顺序不连续".to_string());
+        return Err("联机一致性清单中的功能插件加载顺序不连续".to_string());
     }
     let mut runtime_names = BTreeSet::new();
     if manifest
@@ -3978,7 +4237,7 @@ fn compare_multiplayer_manifests(
             &mut differences,
             "error",
             "packages",
-            "package 数量",
+            "资源型 Mod 数量",
             local.packages.len().to_string(),
             peer.packages.len().to_string(),
         );
@@ -4063,7 +4322,7 @@ fn compare_multiplayer_manifests(
             &mut differences,
             "error",
             "natives",
-            "DLL 数量",
+            "功能插件数量",
             local.natives.len().to_string(),
             peer.natives.len().to_string(),
         );
@@ -4257,7 +4516,7 @@ fn parse_me3_document(
         .map_err(|e: toml::de::Error| e.to_string())?;
     let table = value
         .as_table()
-        .ok_or_else(|| "ME3 profile 根节点必须是 TOML 表".to_string())?;
+        .ok_or_else(|| "ME3 启动配置（Profile）根节点必须是 TOML 表".to_string())?;
     let mut packages = Vec::new();
     let mut natives = Vec::new();
     let mut root_fields = table.clone();
@@ -4474,7 +4733,8 @@ fn build_me3_profile(
         ),
     );
 
-    toml::to_string_pretty(&root).map_err(|error| format!("生成 ME3 profile 失败：{error}"))
+    toml::to_string_pretty(&root)
+        .map_err(|error| format!("生成 ME3 启动配置（Profile）失败：{error}"))
 }
 
 fn default_package_fields() -> toml::Table {
@@ -4500,7 +4760,7 @@ fn merge_author_profile_metadata(
         if let Some(existing) = target.root_fields.get(&key) {
             if existing != &value {
                 return Err(format!(
-                    "多个作者 Profile 的根字段冲突：{key}。请只启用一个需要独立启动语义的整合包。"
+                    "多个作者启动配置的根字段冲突：{key}。请只启用一个需要独立启动语义的整合包。"
                 ));
             }
             continue;
@@ -4879,6 +5139,218 @@ fn has_package_like_content(path: &Path) -> bool {
             })
 }
 
+#[derive(Default)]
+struct ClothingScanState {
+    local_parts: BTreeSet<String>,
+    online_parts: BTreeSet<String>,
+    appearance_ids: BTreeSet<String>,
+    has_regulation: bool,
+    has_manual_online_setup: bool,
+    scanned_files: usize,
+    truncated: bool,
+}
+
+fn analyze_clothing_mod(path: &Path) -> ClothingModInfo {
+    if !path.is_dir() {
+        return ClothingModInfo {
+            kind: "none".to_string(),
+            online_support: "not_applicable".to_string(),
+            ..ClothingModInfo::default()
+        };
+    }
+
+    let mut state = ClothingScanState::default();
+    collect_clothing_files(path, path, &mut state, 0);
+
+    let detected = !state.local_parts.is_empty() || !state.online_parts.is_empty();
+    if !detected {
+        return ClothingModInfo {
+            kind: "none".to_string(),
+            online_support: "not_applicable".to_string(),
+            has_regulation: state.has_regulation,
+            has_manual_online_setup: state.has_manual_online_setup,
+            ..ClothingModInfo::default()
+        };
+    }
+
+    let paired_part_file_count = state
+        .local_parts
+        .iter()
+        .filter(|path| state.online_parts.contains(&online_part_path(path)))
+        .count();
+    let missing_online_part_count = state
+        .local_parts
+        .len()
+        .saturating_sub(paired_part_file_count);
+    let orphan_online_part_count = state
+        .online_parts
+        .iter()
+        .filter(|path| !state.local_parts.contains(&local_part_path(path)))
+        .count();
+    let online_support = if state.online_parts.is_empty() {
+        "missing"
+    } else if missing_online_part_count == 0 && orphan_online_part_count == 0 {
+        "complete"
+    } else {
+        "partial"
+    };
+    let requires_appearance_reset = state.has_regulation;
+    let mut warnings = Vec::new();
+
+    if requires_appearance_reset {
+        warnings.push(
+            "包含玩法数据文件，可能提供本体不存在的服装 ID；停用或删除前请先在游戏内换回本体服装"
+                .to_string(),
+        );
+    }
+    match online_support {
+        "missing" => warnings.push(
+            "未发现与本机服装资源配对的 _l 队友视角文件；联机队友看到的外观可能不同或异常"
+                .to_string(),
+        ),
+        "partial" => warnings.push(format!(
+            "队友视角资源不完整：缺少 {missing_online_part_count} 个 _l 配对，另有 {orphan_online_part_count} 个孤立 _l 文件"
+        )),
+        _ => {}
+    }
+    if state.has_manual_online_setup {
+        warnings.push(
+            "包含联机准备脚本；管理器只识别并提示，不会自动运行 BAT、CMD、PowerShell 或 EXE"
+                .to_string(),
+        );
+    }
+    if state.truncated {
+        warnings.push(format!(
+            "服装结构扫描达到 {MAX_CLOTHING_SCAN_FILES} 个文件上限，结果可能不完整"
+        ));
+    }
+
+    ClothingModInfo {
+        detected,
+        kind: if requires_appearance_reset {
+            "expanded".to_string()
+        } else {
+            "replacement".to_string()
+        },
+        part_file_count: state.local_parts.len() + state.online_parts.len(),
+        local_part_file_count: state.local_parts.len(),
+        online_part_file_count: state.online_parts.len(),
+        paired_part_file_count,
+        missing_online_part_count,
+        orphan_online_part_count,
+        has_regulation: state.has_regulation,
+        has_manual_online_setup: state.has_manual_online_setup,
+        online_support: online_support.to_string(),
+        requires_appearance_reset,
+        appearance_ids: state.appearance_ids.into_iter().collect(),
+        warnings,
+    }
+}
+
+fn safe_initial_mod_enabled(clothing: &ClothingModInfo) -> bool {
+    !clothing.requires_appearance_reset
+}
+
+fn collect_clothing_files(
+    root: &Path,
+    current: &Path,
+    state: &mut ClothingScanState,
+    depth: usize,
+) {
+    if depth > MAX_SCAN_DEPTH || state.truncated {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(current) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        if state.scanned_files >= MAX_CLOTHING_SCAN_FILES {
+            state.truncated = true;
+            return;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_clothing_files(root, &path, state, depth + 1);
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+
+        state.scanned_files += 1;
+        let file_name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if file_name == "regulation.bin" {
+            state.has_regulation = true;
+        }
+        if is_manual_online_setup_file(&file_name) {
+            state.has_manual_online_setup = true;
+        }
+        if !is_clothing_part_file(&file_name) {
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(root)
+            .ok()
+            .map(normalize_relative_path)
+            .unwrap_or_else(|| file_name.clone())
+            .to_ascii_lowercase();
+        if file_name.ends_with("_l.partsbnd.dcx") {
+            state.online_parts.insert(relative);
+        } else {
+            state.local_parts.insert(relative);
+        }
+        if let Some(appearance_id) = clothing_appearance_id(&file_name) {
+            state.appearance_ids.insert(appearance_id);
+        }
+    }
+}
+
+fn is_clothing_part_file(file_name: &str) -> bool {
+    file_name.ends_with(".partsbnd.dcx")
+        && ["am_", "bd_", "hd_", "lg_", "fc_", "hr_"]
+            .iter()
+            .any(|prefix| file_name.starts_with(prefix))
+}
+
+fn is_manual_online_setup_file(file_name: &str) -> bool {
+    file_name.contains("online")
+        && [".bat", ".cmd", ".ps1", ".exe"]
+            .iter()
+            .any(|extension| file_name.ends_with(extension))
+}
+
+fn clothing_appearance_id(file_name: &str) -> Option<String> {
+    let stem = file_name.strip_suffix(".partsbnd.dcx")?;
+    let stem = stem.strip_suffix("_l").unwrap_or(stem);
+    stem.split('_')
+        .find(|segment| {
+            segment.len() >= 3 && segment.chars().all(|character| character.is_ascii_digit())
+        })
+        .map(ToOwned::to_owned)
+}
+
+fn online_part_path(local_path: &str) -> String {
+    local_path
+        .strip_suffix(".partsbnd.dcx")
+        .map(|stem| format!("{stem}_l.partsbnd.dcx"))
+        .unwrap_or_else(|| format!("{local_path}_l"))
+}
+
+fn local_part_path(online_path: &str) -> String {
+    online_path
+        .strip_suffix("_l.partsbnd.dcx")
+        .map(|stem| format!("{stem}.partsbnd.dcx"))
+        .unwrap_or_else(|| online_path.to_string())
+}
+
 fn is_disabled_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -4963,6 +5435,99 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some(r"D:\Game\mods\duchessunmask")
         );
+    }
+
+    #[test]
+    fn classifies_parts_only_clothing_and_missing_online_view() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_clothing_replacement_test_{}",
+            current_timestamp()
+        ));
+        fs::create_dir_all(root.join("parts")).unwrap();
+        fs::write(
+            root.join("parts").join("bd_m_5030.partsbnd.dcx"),
+            b"duchess",
+        )
+        .unwrap();
+
+        let clothing = analyze_clothing_mod(&root);
+
+        assert!(clothing.detected);
+        assert_eq!(clothing.kind, "replacement");
+        assert_eq!(clothing.local_part_file_count, 1);
+        assert_eq!(clothing.online_part_file_count, 0);
+        assert_eq!(clothing.online_support, "missing");
+        assert!(!clothing.requires_appearance_reset);
+        assert!(safe_initial_mod_enabled(&clothing));
+        assert_eq!(clothing.appearance_ids, vec!["5030"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn classifies_expanded_clothing_and_complete_online_pairs() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_clothing_expansion_test_{}",
+            current_timestamp()
+        ));
+        let parts = root.join("parts");
+        fs::create_dir_all(&parts).unwrap();
+        fs::write(root.join("regulation.bin"), b"extended outfits").unwrap();
+        fs::write(parts.join("bd_m_9996.partsbnd.dcx"), b"local").unwrap();
+        fs::write(parts.join("bd_m_9996_l.partsbnd.dcx"), b"online").unwrap();
+        fs::write(parts.join("01_Online.bat"), b"copy local online").unwrap();
+
+        let clothing = analyze_clothing_mod(&root);
+
+        assert_eq!(clothing.kind, "expanded");
+        assert!(clothing.has_regulation);
+        assert!(clothing.has_manual_online_setup);
+        assert!(clothing.requires_appearance_reset);
+        assert!(!safe_initial_mod_enabled(&clothing));
+        assert_eq!(clothing.online_support, "complete");
+        assert_eq!(clothing.paired_part_file_count, 1);
+        assert_eq!(clothing.missing_online_part_count, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn risky_clothing_destination_stays_disabled_when_names_collide() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_clothing_destination_test_{}",
+            current_timestamp()
+        ));
+        fs::create_dir_all(root.join("Outfits.disabled")).unwrap();
+
+        let destination = unique_mod_destination(&root, "Outfits", false);
+
+        assert_eq!(destination, root.join("Outfits_1.disabled"));
+        assert!(is_disabled_path(&destination));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "requires local pure-replacement and expanded-clothing sample directories"]
+    fn verifies_local_clothing_samples_read_only() {
+        let replacement_dir = std::env::var("NIGHTREIGN_CLOTHING_REPLACEMENT_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_CLOTHING_REPLACEMENT_TEST_DIR");
+        let expanded_dir = std::env::var("NIGHTREIGN_CLOTHING_EXPANDED_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_CLOTHING_EXPANDED_TEST_DIR");
+
+        let replacement = analyze_clothing_mod(&replacement_dir);
+        let expanded = analyze_clothing_mod(&expanded_dir);
+
+        assert_eq!(replacement.kind, "replacement");
+        assert_eq!(replacement.local_part_file_count, 5);
+        assert_eq!(replacement.online_support, "missing");
+        assert!(!replacement.has_regulation);
+        assert_eq!(expanded.kind, "expanded");
+        assert_eq!(expanded.local_part_file_count, 228);
+        assert_eq!(expanded.online_part_file_count, 228);
+        assert_eq!(expanded.paired_part_file_count, 228);
+        assert_eq!(expanded.online_support, "complete");
+        assert!(expanded.has_regulation);
+        assert!(expanded.has_manual_online_setup);
     }
 
     #[test]
@@ -5411,7 +5976,8 @@ path = "map/Server Redirector/cl_server_redirector.dll"
 
         let error = validate_mmv_seamless_candidate(&mod_dir).unwrap_err();
 
-        assert!(error.contains("恰好一个 regulation.bin"));
+        assert!(error.contains("恰好一个玩法数据文件"));
+        assert!(error.contains("regulation.bin"));
         assert!(error.contains('2'));
         let _ = fs::remove_dir_all(root);
     }
@@ -5797,7 +6363,7 @@ path = "map/Server Redirector/cl_server_redirector.dll"
 
         assert_eq!(status, "warning");
         assert!(message.contains("人物或武器不显示"));
-        assert!(message.contains("Profile 的 savefile 不能隔离 Seamless 存档"));
+        assert!(message.contains("启动配置中的 savefile 不能隔离 Seamless 存档"));
     }
 
     #[test]
@@ -6094,6 +6660,33 @@ path = "map/Server Redirector/cl_server_redirector.dll"
 
         assert_eq!(first_owners.len(), 1);
         assert_eq!(conflicts["parts/example.dcx"], BTreeSet::from([0, 1]));
+    }
+
+    #[test]
+    fn launch_validation_rejects_multiple_regulation_owners() {
+        let plan = GeneratedProfilePlan {
+            content: String::new(),
+            network_backend: NetworkBackend::None,
+            author_profile_sources: Vec::new(),
+            savefile: None,
+            start_online: None,
+            selected_mod_count: 2,
+            package_count: 2,
+            native_count: 0,
+            mmv_seamless_community_count: 0,
+            regulation_files: vec![
+                PathBuf::from(r"C:\Mods\SkinOverhaul\regulation.bin"),
+                PathBuf::from(r"C:\Mods\MMV\mod\regulation.bin"),
+            ],
+            zhocn_packages: Vec::new(),
+            packages: Vec::new(),
+            natives: Vec::new(),
+        };
+
+        let error = validate_single_regulation_owner(&plan).unwrap_err();
+        assert!(error.contains("SkinOverhaul"));
+        assert!(error.contains("MMV"));
+        assert!(error.contains("不能靠加载顺序自动合并"));
     }
 
     #[test]

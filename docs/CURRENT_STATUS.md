@@ -1,8 +1,8 @@
 # 当前状态与新会话交接
 
-更新时间：2026-07-31
+更新时间：2026-08-02
 当前分支：`master`
-本轮改动起点：`6e09440 docs: add release documentation`
+当前基线提交：`2680136 feat: compare multiplayer mod manifests`
 
 本文件记录当前实现的短期交接状态。长期规则和已验证启动链路以仓库根目录 `AGENTS.md` 为准；视频研究与更新脚本以 `docs/VIDEO_UPDATE_PLAN.md` 为准。
 
@@ -16,7 +16,7 @@
    Spacewar 硬门禁，也不要覆盖实际游戏目录。
 5. 如果继续 UI 工作，先在默认 1160×760 和最小 960×640 窗口检查现状，再修改布局。
 
-## 提交后的预期工作树
+## 工作树背景与约束
 
 本轮前端 UI、Rust/Tauri 后端、权限、依赖、开发脚本、README、CHANGELOG 和项目记忆改动随本文件一并提交。新增并纳入版本控制的内容包括：
 
@@ -28,7 +28,42 @@
 
 `release/v0.1.0/nightreign-mod-manager_0.1.0_x64-setup.exe` 的本地删除不属于本轮提交。提交后它仍会显示为已删除；发布前必须由用户决定是恢复旧安装包、保留删除，还是用新构建产物替换。不要擅自恢复或提交。
 
+2026-08-01 阶段验收交接时，`AGENTS.md`、本文件、
+`docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md` 和 savefile 复盘 JSON 有未提交文档更新；
+`app/` 没有未提交源码改动。新会话应保留这些文档改动，并继续把安装程序删除视为
+用户的无关变更，除非用户明确决定如何处理。
+
 ## 本轮已完成
+
+### 2026-08-02 更多服装未加载定位与阶段修复
+
+- 用户 00:12 的实际启动并不是服装资源加载后显示失败：生成的
+  `active-nightreign.me3`、`last-gameplay-profile.json` 和本轮 ME3 日志只包含
+  MMV package 与 early-load `nrsc.dll`，没有 Skin Overhaul package。
+- 根因是外部注册仍指向已经不存在的
+  `D:\Game\ELDEN RING NIGHTREIGN\mods\Skin Overhaul`，实际目录为
+  `...\mods\SkinOverhaul`。旧实现允许失效记录保持启用，却会在生成启动配置时静默
+  产生零 package，造成“界面似乎启用、游戏里完全没加载”的假象。
+- 管理器现在会显示“原文件夹已失效”，禁用其启用开关，并提供“重新定位文件夹”；
+  重新定位会保留外部注册状态，并把所有配置方案中的路径派生 Mod ID 一并迁移。
+  后端也拒绝启用不存在的外部目录，生成启动配置遇到已选中的失效路径会直接报出
+  玩家可执行的修复说明，不再静默跳过。
+- 路径修正后仍不能把当前 Skin Overhaul 直接叠加到 MMV 2.1.7.1：前者
+  `regulation.bin` 为 2,785,376 字节、SHA-256
+  `B06275A641CAA50E08E235E7F5D2C8BA545FDE7BE5D70AFDB693D2920D6B51FD`；当前 MMV
+  文件为 3,191,600 字节、SHA-256
+  `D36B9960E19C748112F2A8D0D4C00D33A2BEC8AE9BB1707975516C3DBB64F579`。
+  两者不是同一玩法数据。启动前检查现对所有方案显示来源并硬阻止多份
+  `regulation.bin`；普通启动和诊断启动的 Rust 后端也执行同一门禁，不能通过跳过
+  UI 检查绕过。
+- 真实目录只读测试通过：Skin Overhaul 仍识别为 228 个本机 parts + 228 个 `_l`
+  完整配对、含扩展服装参数和 `01_Online.bat`；管理器没有运行脚本。女爵去面罩
+  样本仍识别为 5 个纯替换 parts、无 regulation。由于当前 MMV/Skin 尚无适配
+  2.1.7.1 的单一合并 regulation，本阶段没有再次启动游戏宣称服装已生效。
+
+下一步应二选一验证：先用 Skin-only + Seamless 独立方案确认服装选择和 `_l` 联机
+视角；或通过可审计的参数级合并生成适配当前 MMV 2.1.7.1 的唯一
+`regulation.bin`。不得用加载顺序或简单覆盖冒充合并。
 
 ### 启动与诊断
 
@@ -79,15 +114,15 @@
 - 高级内容主线为 MMV + Weapons 官方预合并 2.1.7.1、602 简中和 Server Redirector；602 当前 314 KB 主文件上传于 2026-07-22，Changelog 明确标注同步 2.1.7.1 的新增武器被动词条，虽然页面顶部仍显示 2.1.6。作者 Profile 的管理器生成与启动前检查已完成真实样本验证，待游戏内地图/敌人/武器、中文、存档行为和 Redirector 联机验收后进入正式推荐。已被 Nexus staff 移除的 MMV Seamless 补丁不得推荐。
 - nighter 当前公开 Nexus 文件陈旧，更新版缺少稳定可信的发布链且加载依赖说明不一致；只保留自定义 DLL/实验项，不进入默认整合包。
 - 已审计用户新下载的 MMV 2.1.7 Hotfix 1 + Weapons 与 `SkinOverhaul` 两个目录，详见 `docs/DOWNLOADED_PACKS_MANAGER_AUDIT.md`。审计时发现的 `savefile/start_online` 丢失和 Seamless/Server Redirector 冲突已由后述 MMV 作者 Profile 兼容层解决；Skin 结论不变。
-- 新下载的 `SkinOverhaul\regulation.bin` 哈希为 `b06275a6...d6b51fd`，与 NightreignPLUS 5.30 中 MMV + Skin 的旧 ERBM 合并输出一致，不是可直接作为独立 Skin 方案判断的干净 regulation；同时尚未生成在线 `_l` 文件。不要启用或与当前 MMV 2.1.7.1 叠加。
+- 新下载的 `SkinOverhaul\regulation.bin` 哈希为 `b06275a6...d6b51fd`，与 NightreignPLUS 5.30 中 MMV + Skin 的旧 ERBM 合并输出一致，不是可直接作为独立 Skin 方案判断的干净 regulation。早期审计时尚未生成 `_l`；2026-08-01 当前目录的只读复核已确认 228 个本机 parts 与 228 个同名 `_l` 全部配对，但这不改变它与当前 MMV 2.1.7.1 的 regulation 冲突边界，不要直接叠加启用。
 - 2026-07-30 已实现 MMV 作者 Profile 兼容层，详见 `docs/MMV_MANAGER_COMPATIBILITY.md`：生成副本保留 `savefile/start_online` 和未知 TOML 字段，规范 `nightrein` 为 `nightreign`，检测 Server Redirector 后禁止自动注入根目录 `nrsc.dll/nighter.dll`，并在混用时阻止启动。真实下载目录与当前工作区的只读集成测试均已通过，生成的 active profile 仅包含 MMV package + `cl_server_redirector.dll`，保留 `NR0000.co2`。
-- 2026-07-31 真实启动回归确认 MMV package、Server Redirector 和作者指定的 `NR0000.co2` 均已被 ME3 正确加载，但当前 `Game` 目录是 OnlineFix/Spacewar 混合环境，游戏报“无法登录游戏服务器”，并出现人物不显示。日志无 ME3 或 Redirector 注入错误，根因边界是管理器错误沿用了 `--skip-steam-init`，且该游戏目录不满足作者要求的正版 Steam 环境。`NR0000.co2` 与 Seamless 默认存档同名，不是独立存档。
+- 2026-07-31 真实启动回归确认 MMV package、Server Redirector 和作者指定的 `NR0000.co2` 均已被 ME3 正确加载，但当前 `Game` 目录是 OnlineFix/Spacewar 混合环境，游戏报“无法登录游戏服务器”。日志无 ME3 或 Redirector 注入错误，根因边界是管理器错误沿用了 `--skip-steam-init`，且该游戏目录不满足作者要求的正版 Steam 环境。当时同时观察到的女爵空白后来证实是无效自定义服装 ID，与 Redirector 无关。`NR0000.co2` 与 Seamless 默认存档同名，不是独立存档。
 - P0 环境隔离现已完成：配置和启动台区分纯正版 Steam、正版 Steam + Seamless、Spacewar + Seamless、自动/未知混合环境；只有 Spacewar 路线标记为用户已实测。纯正版与正版 Seamless 不使用 `--skip-steam-init/--online`，Spacewar 保留两项已验证参数，MMV Server Redirector 仅使用 `--online`。
 - 正版两种模式和 MMV 必须匹配 Steam `appmanifest_2622380.acf`；OnlineFix/模拟层文件、后端错配、未知自动检测结果会在实际启动前硬阻止。`nighter.dll` 已从 Seamless 后端判定中剥离，单独存在不再触发 Seamless 参数。
 - 启动/诊断启动前会按有效存档名备份所有账号目录中的存档及 `.bak`；普通正版 Mod 默认使用 `NR0000.nmm`，Seamless 从 `nrsc_settings.ini` 推断扩展名，MMV 的 `NR0000.co2` 会显示同名风险警告。
 - OnlineFix 补丁安装现为事务操作：仅 Spacewar + Seamless 可用，Steam 正版目录硬阻止；覆盖 8 个固定目标前生成清单和原文件备份，失败自动回滚，启动台可恢复最近备份。
 - ME3 启动前检查会读取版本；低于建议的 0.12.1 只警告、不阻断，以保留当前 0.11.0 Spacewar 已验证链路。
-- MMV 尚未完成最终游戏内验收。下一次必须由具备正版环境的测试者把管理器指向干净的 Steam 正版 `Game` 目录，并确认 Forsaken Hollows DLC，再验证人物、地图、敌人、武器、存档行为和联机。当前用户只能提供 Spacewar + Seamless 环境，因此不得将 MMV 标记为完整实测通过。
+- MMV 的 Spacewar + Seamless 社区路线已完成本机阶段验收（地图/敌人、更多武器、602、登录和好友邀请）；MMV 作者支持的 Server Redirector 路线仍必须由具备正版环境的测试者指向干净 Steam `Game`、确认 Forsaken Hollows DLC 后另行验证。两条路线不得互相代替，也不能把本机阶段验收表述为作者路线或双人实战通过。
 - MMV、MoreWeapons 和 Skin Overhaul 的 Nexus 权限均禁止上传到其他站点，因此不能作为管理器/视频附件重新分发；可分享清单、来源链接、哈希、管理器生成配置，以及按要求署名的 602 翻译。
 - 已建立 `docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md` 作为下一会话专项交接。
   最新启动前检查确认：当前 Game 在停用 MMV 后可正确识别为已实测的
@@ -154,17 +189,16 @@
   `docs/reviews/2026-07-31-cross-project-mod-manager-knowledge-transf-7c6a2e65.review.json`。
   后续非平凡任务应先检索 ReviewHub，再把命中的知识分成可复用规则、领域差异和
   本项目新增项。
-- 602 真实 ZIP 已通过管理器安装到当前 Game 的 `mods` 目录并完成游戏内 A/B。
-  关键结论不是 MMV 资源缺失：原 `NR0000.co2` 在“仅 Seamless + 602”和完整
-  “MMV + Weapons + 602 + Seamless”下都出现人物异常；新建角色在仅 Seamless
-  时人物/默认武器正常，在完整整合下也保持正常，同时 MMV 页脚与中文界面生效。
-  因此当前人物问题已定位为旧存档中的装备/玩法参数状态，而不是 package、中文层
-  或 Seamless 注入失败。
+- 602 真实 ZIP 已通过管理器安装到当前 Game 的 `mods` 目录并完成游戏内观察。
+  原 `NR0000.co2` 曾在多种 Mod 组合下表现为女爵空白；最终由用户确认根因是存档选择了
+  “更多服装”提供、游戏本体不存在的服装。换回默认或本体已有服装后女爵恢复，说明
+  MMV、602、Seamless、女爵面具 Mod 和存档主体均不是直接原因。此类问题应先恢复有效
+  外观，再做同源存档 A/B；不能仅凭人物空白推断 regulation 或注入失败。
 - A/B 期间发现 ME3 Profile 的自定义 `savefile` 在 Spacewar + Seamless 下并未
-  隔离存档，实际仍写入 `NR0000.co2`。原存档已从管理器启动前备份恢复，当前
+  隔离存档，实际仍写入 `NR0000.co2`。换回有效服装后的当前验收基线已备份，
   `NR0000.co2` 与 `.bak` 的 SHA-256 均为
-  `74E36DCC7F4A0A9065043F5DBD972C6659479A5F88B918E26C81551150685B8D`；
-  干净测试存档另存于 Git 忽略的 `.build-tmp`，没有覆盖提交内容。
+  `F03D51FA08B3D92EAF1B72B0D365408899D832420DA02202694ACC247E72E379`；
+  原始异常服装状态和各轮结果仍保留在受管备份中，没有删除用户进度。
 - 管理器现改为：Seamless 环境始终按 `nrsc_settings.ini` 推断真实存档名；存档复制
   后执行 SHA-256 回读校验；记录上次管理器启动的 regulation 指纹；再次启动时若
   玩法参数变化或旧存档来源未知，启动前检查会提示人物/武器不显示风险。该保护
@@ -227,24 +261,120 @@ Spacewar + Seamless，并因 MMV Server Redirector 环境错配而阻止启动�
   44 项 Rust 测试、`npm run build` 和 `npm run lint`。
 - 原始联机存档 `NR0000.co2` 与 `.bak` 均已恢复，SHA-256 都是
   `74E36DCC7F4A0A9065043F5DBD972C6659479A5F88B918E26C81551150685B8D`。
-  当前仍保持 MMV 禁用、602 启用；不要在未获用户明确授权时用干净测试存档覆盖它。
+  暂停当时保持 MMV 禁用、602 启用；不要把这条历史状态当成当前状态。
 
 新会话应直接读取本文件和 `docs/SPACEWAR_SEAMLESS_MODPACK_HANDOFF.md`，不要重复下载
-或重新做已通过的静态验证。剩余真实验收只有两项：用户明确选择是否临时切换到已验证
-人物正常的干净测试存档，进入游戏确认 MMV 地图/敌人/武器/中文；第二位玩家用自己的
-管理器导出清单并互换比较，再完成双方 Seamless 联机观察。只有这两项完成后才能宣称
-整合包和双端一致性真实通过。
+或重新做已通过的静态验证。第一项同源存档真实游戏验收已于 2026-08-01 完成；剩余
+联机验收是第二位玩家用自己的管理器导出清单并互换比较，再真正加入同一 Seamless
+房间观察。只有该项完成后才能宣称双端一致性和双人实战通过。
+
+### 2026-08-01 同存档验收恢复点
+
+- 用户指出新存档不能用于证明原人物正常，后续游戏内操作改由用户人工完成并发送截图；
+  代理只准备同源存档、Mod 组合、Profile、日志和哈希证据。
+- 刚才被游戏写入的新存档已另存到
+  `backups/saves/manual-new-save-after-game-20260801-1940/76561199403037768/`，
+  SHA-256 为 `91B89F779643E2B27CE60086027D90CC2FD03B481A43BEC7CFBB594F00C9CC98`。
+- 当时活动 `NR0000.co2` 与 `.bak` 已从同一原始备份恢复，SHA-256 均为
+  `74E36DCC7F4A0A9065043F5DBD972C6659479A5F88B918E26C81551150685B8D`。
+- 发现此前误启动了 2026-05-23 的旧安装程序；旧程序在切换外部 Mod 时会丢掉它不认识的
+  `profile_mode` 字段，导致生成副本同时包含 Server Redirector 与 `nrsc.dll`。该次
+  “无法连接服务器”不能作为社区模式失败证据。
+- 已基于提交 `2680136` 重建并替换实际安装目录程序。旧 EXE 备份在
+  `D:\Game\ELDEN RING NIGHTREIGN\nightreign-mod-manager\backups\app\20260801-2018\`；
+  新安装 EXE SHA-256 为
+  `C3A3744C6BB486BDB35CB893C7553E72EE18195221B70F9A8F1A04AE55724CCF`。
+- 新程序的“不启动游戏”预检显示可以启动、Spacewar + Seamless、Server Redirector
+  未使用、唯一 MMV `regulation.bin` 和唯一 602 中文层；实际重新生成的
+  `active-nightreign.me3` 只含 early-load `nrsc.dll`、MMV + Weapons package 与 602，
+  不含 `cl_server_redirector.dll`。
+- 用户随后完成真实游戏观察：游戏服务器登录成功且 Steam 好友邀请可用，说明新版
+  社区 Profile 的 `nrsc.dll` 联机链路成功，旧程序混入 Server Redirector 才是此前
+  “无法连接服务器”的直接原因。除女爵外其他角色正常；女爵故障最终确认来自
+  “更多服装”留下的非本体服装选择，换回默认或本体已有服装后立即恢复。
+- 本次测试后的 `NR0000.co2` 与 `.bak` 已归档到
+  `backups/saves/manual-duchess-finding-after-test-20260801-2055/76561199403037768/`，
+  SHA-256 均为 `CA3A1081F047DD346539741722B3DE8091E0AFDADCA13E831E77F5CCD186150E`。
+  活动双文件已再次恢复到同一原始哈希 `74E36D...85B8D`；下一轮已关闭
+  MMV + Weapons、保留 602 + Seamless，只由用户验证女爵能否显示以及能否切走再切回。
+- 上述“602 + Seamless、关闭 MMV”对照仍复现：女爵空白，切换到其他角色后无法切回。
+  本轮 `active-nightreign.me3` 与 ME3 `2026-08-01_20-55-33.log` 明确只含 early-load
+  `nrsc.dll` 和 602 package；运行时只覆盖 602 的 `item_dlc01.msgbnd.dcx`、
+  `menu_dlc01.msgbnd.dcx`，没有 MMV package、`regulation.bin` 或任何女爵 parts。
+  标题页脚显示的“MMV 2.1.7.1 / 武器模组兼容补丁”来自 602 菜单文本，不能作为 MMV
+  主包加载证据。MMV 已从当前直接原因中排除。
+- `女爵去除面罩.disabled` 仅含五个女爵 body parts（5030/5130/5230/5330/5530），
+  没有 regulation，且 Profile/日志未引用；直接残留加载不成立。为验证这一点做过的
+  纯 Seamless 隔离没有修改任何 Mod 文件内容。审计后已把面具 Mod 恢复到 `.disabled`、
+  恢复 602 与 MMV 社区模式；当前使用换回有效服装后的 `F03D51FA...2E379` 存档作为
+  新一轮完整整合验收基线。
+
+### 2026-08-01 Spacewar 整合阶段验收完成
+
+- 用户用修正服装后的同一存档完成两轮真实游戏测试。22:07 的 ME3 日志
+  `2026-08-01_22-07-21.log` 同时记录 early-load `nrsc.dll`、MMV + Weapons package、
+  602 package，并实际覆盖 MMV `regulation.bin` 与 602 的 item/menu 两个消息包。
+- 中文开启时，新增武器“蕾菈娜的对剑”、战技“月与火的架势”和新增被动词条显示为
+  中文；女爵使用本体有效服装时模型正常。这证明更多武器、602 文本层和人物渲染可
+  在当前 Spacewar + Seamless 社区链路中同时工作。
+- 22:14 关闭 602 后，生成 Profile 与 `2026-08-01_22-14-04.log` 只含 MMV package
+  和 `nrsc.dll`。相同新增武器仍存在，但名称/战技/词条变成 `?WeaponName?`、
+  `ArtsName(5170)`、`AttachEffectName(9040600)`；随后实际进入本体原先没有的白金之子
+  主城。该 A/B 同时证明 MMV/Weapons 不依赖 602 才能加载，602 只负责对应文本。
+- 此阶段可标记为：本机 Spacewar + Seamless 下，管理器生成社区 Profile、服务器登录、
+  Steam 好友邀请、MMV 新地图/敌人、更多武器和 602 简中均已实测。仍未验证第二位玩家
+  真正加入同一房间后的双人实战，也未逐项遍历所有地图、敌人和武器。
+- 当前停留状态是 MMV + Weapons 启用、`mmv_seamless_community`、602 关闭、女爵面具
+  Mod 保持 `.disabled`。当前 `active-nightreign.me3` 仅含 `nrsc.dll` 与 MMV package。
+  验收后 `NR0000.co2` 与 `.bak` 已备份到
+  `backups/saves/manual-stage1-mmv-validated-20260801-2230/76561199403037768/`，SHA-256
+  均为 `C658A54655F621E78DFE20C451A8D584961D104BEFD979B1CD0C827D60AB96CD`。
+- 下一对话不要重复下载或重新证明 MMV/602 是否加载。
+
+### 2026-08-01 服装安全与玩家术语适配
+
+- Rust 扫描器现在识别六类服装 parts 前缀、同名 `_l` 队友视角资源、根级
+  `regulation.bin`、外观 ID 和作者附带的联机生成脚本。脚本只作为提示，不会执行。
+- 纯 parts 显示为“服装替换”；parts + regulation 显示为“扩展服装”。扩展服装 ZIP
+  先解压到暂存目录，结构检查完成后以 `.disabled` 安装；重名目标仍保留停用后缀。
+  首次添加外部扩展服装目录也默认停用，重复添加已存在记录时保持原启停状态。
+- 停用扩展服装、删除其记录或切换会停用它的配置方案前，界面要求玩家确认已换回本体
+  服装；启用缺失/部分 `_l` 的服装时提醒“自己可能正常、队友可能异常”。
+- Mod 卡片显示本机/队友 parts 数、配对状态、玩法数据文件、检测到的外观 ID 和手动
+  脚本提示；启动前检查会汇总已启用服装及 `_l` 缺口。新增“服装”筛选。
+- 主页面术语已改为“启动配置、资源型 Mod、功能插件、玩法数据文件、联机一致性清单、
+  队友视角资源”，折叠的“高级技术详情”保留 Profile/package/native/regulation.bin/
+  manifest 对照，便于排错和阅读作者文档。
+- 两个本地样本只读验证通过：女爵去面罩为 5 个本机 parts、无 regulation、缺 5 个
+  `_l`；SkinOverhaul 为 228 个本机 parts + 228 个 `_l` 全配对，并含 regulation 与
+  `01_Online.bat`。验证没有运行 BAT，也没有改变任何 Mod 启停状态。
+- 验证命令均通过：`cargo fmt --all -- --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo check`、`cargo test`（41 passed，7 ignored）、真实服装样本 ignored test、`npm run lint`、`npm run build`。
+
+### 2026-08-01 启动体验与检查指引
+
+- 旧启动路径使用 `cmd /K` 和 `CREATE_NEW_CONSOLE`，因此会弹出终端并在游戏退出后停留在
+  提示符。现已改为后台 `cmd /C` + `CREATE_NO_WINDOW`；ME3 输出仍写入
+  `launch\last-launch.log`，启动页和成功提示均指向诊断页，不再让玩家处理终端。
+- 启动前检查现在按玩家语言显示“发生了什么 / 下一步怎么做”，红色为必须处理、黄色为
+  风险提醒；原始路径、文件名、版本和后端报错收进“系统详情”。新增“启动说明”窗口，
+  解释目录、联机方式、启动配置、资源型 Mod、功能插件、玩法数据文件、`_l` 资源和日志。
+- 启动台、设置页和运行环境卡进一步替换裸露术语：用“社区联机插件”“社区联机运行组件”
+  “作者指定的联机方式”等玩家名称，并在说明或高级详情保留 Seamless、Spacewar、
+  Server Redirector、ME3 等对照。
+- “应用联机补丁”和“恢复最近一次联机补丁备份”已从启动控制隐藏；后端命令暂保留，等待
+  完整事务和发布回归后再评估，不要对当前用户目录自动复制或覆盖补丁文件。
+- 开发窗口的启动说明和启动前检查已做只读界面回归；本轮没有点击启动游戏，也没有改变
+  用户的 Mod、存档或联机文件。
 
 尚未在本次交接前重新验证：
 
 - `npx tauri build` 生产打包；
 - 新安装包的安装/卸载；
-- 最新 UI 和进程检测修改后的完整真实游戏启动；
-- 最新 P0 代码下 Spacewar + Seamless 的完整真实游戏启动与双人联机；
+- 第二位玩家加入同一 Seamless 房间后的双人实战；本机登录、Steam 好友邀请入口已通过；
 - 纯正版 Steam、正版 Steam + Seamless 和 MMV Server Redirector 真实启动（当前用户无此环境，只完成静态规则与自动化测试）；
 - 大型真实 Mod ZIP 的结构组合与冲突扫描性能。
 
-历史上用户已确认游戏可以通过管理器启动且 Mod 生效，但这不能替代最新工作树的回归。
+最新安装程序已由用户完成真实启动并确认 MMV/Weapons/602 生效；生产安装包本身仍需另做安装/卸载回归。
 
 ## 建议实施顺序
 
@@ -253,7 +383,7 @@ Spacewar + Seamless，并因 MMV Server Redirector 环境错配而阻止启动�
 1. 完全退出并重新打开 Codex，使更新后的全局 Skill 生效。
 2. 从仓库根目录运行 `.\dev.bat`，确认 Tauri 不再反复启动退出。
 3. 先点“启动前检查（不会启动游戏）”，确认无残留进程误报。
-4. 只点击一次普通启动，确认游戏、ME3 控制台、SeamlessCoop 和至少一个资源包 Mod 正常。
+4. 只点击一次普通启动，确认游戏在后台启动、没有可见终端窗口、SeamlessCoop 和至少一个资源型 Mod 正常。
 5. 退出游戏后再次检查进程保护和日志。
 6. 检查 1160×760、960×640 两个窗口尺寸的主要页面。
 
@@ -262,6 +392,8 @@ Spacewar + Seamless，并因 MMV Server Redirector 环境错配而阻止启动�
 - 检测压缩包多套一层、无法识别的入口、`.me3` 引用缺失、DLL/资源包类型和已知依赖。
 - UI 区分“目录已启用”和“预计可以加载”，并提供可执行的修复提示。
 - 继续用真实 Mod 覆盖单根目录、多根目录、`.me3`、DLL-only、资源包-only 和混合型 ZIP。
+- 服装首轮结构检查已经完成；继续补充半套 `_l`、多部位命名和多个 regulation 组合的
+  真实 ZIP。当前只识别作者脚本，不执行或代替作者生成队友资源。
 
 ### P1：联机一致性清单增强
 

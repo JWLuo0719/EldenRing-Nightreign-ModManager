@@ -15,12 +15,41 @@ export interface ModInfo {
   savefile: string;
   startOnline: boolean | null;
   profileMode: "author" | "mmv_seamless_community";
+  pathAvailable: boolean;
+  clothing: ClothingModInfo;
   icon?: string;
+}
+
+export interface ClothingModInfo {
+  detected: boolean;
+  kind: "none" | "replacement" | "expanded";
+  partFileCount: number;
+  localPartFileCount: number;
+  onlinePartFileCount: number;
+  pairedPartFileCount: number;
+  missingOnlinePartCount: number;
+  orphanOnlinePartCount: number;
+  hasRegulation: boolean;
+  hasManualOnlineSetup: boolean;
+  onlineSupport: "not_applicable" | "missing" | "partial" | "complete";
+  requiresAppearanceReset: boolean;
+  appearanceIds: string[];
+  warnings: string[];
 }
 
 export interface ModInstallResult {
   path: string;
   zhocnLayoutNormalized: boolean;
+  enabled: boolean;
+  clothing: ClothingModInfo;
+}
+
+export interface ExternalModRelinkResult {
+  oldModId: string;
+  newModId: string;
+  path: string;
+  enabled: boolean;
+  clothing: ClothingModInfo;
 }
 
 export interface Profile {

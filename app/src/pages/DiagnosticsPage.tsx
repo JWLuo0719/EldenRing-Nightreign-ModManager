@@ -5,6 +5,7 @@ import type {
   MultiplayerManifestComparison,
   MultiplayerManifestExport,
 } from "../types/mod";
+import { TechnicalGlossary } from "../components/TechnicalGlossary";
 import { PageFrame } from "./LaunchPage";
 
 type ViewerKey = "profile" | "script" | "log" | "diagnose" | "multiplayer";
@@ -135,19 +136,22 @@ export function DiagnosticsPage({
           <section className="panel-card rounded-xl p-4">
             <h2 className="text-base font-semibold text-text-primary">启动诊断</h2>
             <p className="mt-2 text-xs leading-5 text-text-muted">
-              Profile 和日志操作不会修改 Mod 文件；启动诊断会真实启动 ME3 和游戏，用于确认注入结果。
+              生成启动配置和读取日志不会修改 Mod 文件；“启动游戏并诊断”会真实打开 ME3 和游戏。
             </p>
             <div className="mt-4 grid gap-2">
-              <ActionButton disabled={busy} label="生成 ME3 Profile" onClick={refreshProfile} />
+              <ActionButton disabled={busy} label="生成启动配置" onClick={refreshProfile} />
               <ActionButton disabled={busy} label="读取脚本和日志" onClick={refreshArtifacts} />
               <ActionButton disabled={busy} label="启动游戏并诊断" onClick={runDiagnose} />
+            </div>
+            <div className="mt-3">
+              <TechnicalGlossary />
             </div>
           </section>
 
           <section className="panel-card rounded-xl p-4">
             <h2 className="text-base font-semibold text-text-primary">双方联机一致性</h2>
             <p className="mt-2 text-xs leading-5 text-text-muted">
-              导出脱敏指纹，比较游戏、Spacewar、Seamless DLL、设置、完整 package 内容与加载顺序。
+              导出脱敏指纹，比较游戏、联机功能插件、设置、完整资源内容与加载顺序。
               大型整合首次读取可能需要 1–2 分钟。
             </p>
             <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
@@ -187,7 +191,7 @@ export function DiagnosticsPage({
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
               {!hasAnalyzedConflicts ? (
                 <p className="rounded-lg border border-dashed border-border p-4 text-sm leading-6 text-text-muted">
-                  尚未分析。点击“分析”后会递归检查启用 Mod 的 package/native 文件路径。
+                  尚未分析。点击“分析”后会递归检查启用的资源型 Mod 与功能插件路径。
                 </p>
               ) : conflicts.length === 0 ? (
                 <p className="rounded-lg border border-success/25 bg-success/10 p-4 text-sm leading-6 text-success">
@@ -265,11 +269,11 @@ export function DiagnosticsPage({
 }
 
 const viewerTabs: Array<{ key: ViewerKey; label: string }> = [
-  { key: "profile", label: "Profile" },
+  { key: "profile", label: "启动配置" },
   { key: "script", label: "脚本" },
   { key: "log", label: "日志" },
   { key: "diagnose", label: "诊断输出" },
-  { key: "multiplayer", label: "联机清单" },
+  { key: "multiplayer", label: "一致性清单" },
 ];
 
 function ActionButton({
@@ -313,7 +317,7 @@ function getViewerState(
         title: "双方联机一致性",
         path: data.multiplayerPath,
         content: data.multiplayerContent,
-        empty: "尚未导出或比较联机清单。",
+        empty: "尚未导出或比较联机一致性清单。",
       };
     case "script":
       return {
@@ -342,7 +346,7 @@ function getViewerState(
         title: "active-nightreign.me3",
         path: data.profilePath,
         content: data.profileContent,
-        empty: "尚未生成 ME3 profile 预览。",
+        empty: "尚未生成启动配置预览。高级内容为 ME3 Profile（.me3）。",
       };
   }
 }

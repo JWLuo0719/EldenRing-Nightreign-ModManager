@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   ConfirmState,
+  ExternalModRelinkResult,
   FileConflict,
   LaunchArtifacts,
   LaunchPreflight,
@@ -155,10 +156,9 @@ export function useModManager() {
     }, "刷新失败");
   }, [loadWorkspace, pushToast, runTask]);
 
-  const toggleMod = useCallback(
-    async (mod: ModInfo) => {
+  const applyModState = useCallback(
+    async (mod: ModInfo, nextEnabled: boolean) => {
       await runTask(async () => {
-        const nextEnabled = !mod.enabled;
         if (isExternalMod(mod)) {
           await invoke("toggle_external_mod", { modId: mod.id, enabled: nextEnabled });
         } else {
@@ -177,14 +177,55 @@ export function useModManager() {
     [activeProfile, loadWorkspace, pushToast, runTask]
   );
 
+  const toggleMod = useCallback(
+    (mod: ModInfo) => {
+      const nextEnabled = !mod.enabled;
+      if (!nextEnabled && mod.clothing.requiresAppearanceReset) {
+        setConfirmState({
+          title: "停用前先换回本体服装",
+          message: `“${mod.name}”包含玩法数据文件（regulation.bin），可能提供本体不存在的服装 ID。\n\n请先保持此 Mod 启用，进入游戏把受影响角色换成本体自带服装，正常退出游戏后再继续停用。否则人物可能不显示，或切换角色后无法切回。`,
+          confirmText: "我已换回，继续停用",
+          danger: true,
+          onConfirm: () => applyModState(mod, false),
+        });
+        return;
+      }
+
+      if (
+        nextEnabled &&
+        mod.clothing.detected &&
+        (mod.clothing.onlineSupport === "missing" || mod.clothing.onlineSupport === "partial")
+      ) {
+        setConfirmState({
+          title: "队友视角资源待检查",
+          message: `“${mod.name}”缺少 ${mod.clothing.missingOnlinePartCount} 个 _l 队友视角配对。你本机的外观仍可能正常，但联机队友看到的服装可能不同或异常。\n\n管理器不会自动运行 Mod 包内的 BAT、CMD、PowerShell 或 EXE；请只按可信作者说明手动准备资源。`,
+          confirmText: "仍然启用",
+          danger: false,
+          onConfirm: () => applyModState(mod, true),
+        });
+        return;
+      }
+
+      void applyModState(mod, nextEnabled);
+    },
+    [applyModState]
+  );
+
   const deleteMod = useCallback(
     (mod: ModInfo) => {
       if (isExternalMod(mod)) {
+        const appearanceWarning = mod.clothing.requiresAppearanceReset
+          ? "\n\n此 Mod 含扩展服装数据。移除注册前请先在游戏内换回本体服装，否则存档可能保留无效外观 ID。"
+          : "";
         setConfirmState({
-          title: "移除外部 Mod",
-          message: `确定从管理器移除“${mod.name}”吗？\n\n这只会删除外部注册记录，不会移动或删除原始文件。`,
-          confirmText: "移除注册",
-          danger: false,
+          title: mod.clothing.requiresAppearanceReset
+            ? "换回本体服装后再移除"
+            : "移除外部 Mod",
+          message: `确定从管理器移除“${mod.name}”吗？\n\n这只会删除外部注册记录，不会移动或删除原始文件。${appearanceWarning}`,
+          confirmText: mod.clothing.requiresAppearanceReset
+            ? "我已换回，移除注册"
+            : "移除注册",
+          danger: mod.clothing.requiresAppearanceReset,
           onConfirm: async () => {
             await runTask(async () => {
               await invoke("remove_external_mod", { modId: mod.id });
@@ -204,10 +245,15 @@ export function useModManager() {
         return;
       }
 
+      const appearanceWarning = mod.clothing.requiresAppearanceReset
+        ? "\n\n此 Mod 含扩展服装数据。删除前请先在游戏内换回本体服装，否则存档可能保留无效外观 ID。"
+        : "";
       setConfirmState({
-        title: "删除 Mod",
-        message: `确定将“${mod.name}”移动到系统回收站吗？\n\n这会移走整个 Mod 文件夹；如需恢复，请从 Windows 回收站还原。`,
-        confirmText: "移到回收站",
+        title: mod.clothing.requiresAppearanceReset ? "换回本体服装后再删除" : "删除 Mod",
+        message: `确定将“${mod.name}”移动到系统回收站吗？\n\n这会移走整个 Mod 文件夹；如需恢复，请从 Windows 回收站还原。${appearanceWarning}`,
+        confirmText: mod.clothing.requiresAppearanceReset
+          ? "我已换回，移到回收站"
+          : "移到回收站",
         danger: true,
         onConfirm: async () => {
           await runTask(async () => {
@@ -235,8 +281,8 @@ export function useModManager() {
       setConfirmState({
         title: useCommunityMode ? "启用社区 Seamless 兼容模式" : "恢复作者联机方式",
         message: useCommunityMode
-          ? `管理器只会在生成的 active-nightreign.me3 副本中移除 Server Redirector，并改用游戏目录现有的 SeamlessCoop\\nrsc.dll。\n\n原始 Mod、作者 .me3、regulation.bin 和 DLL 都不会被修改。此方式来自社区实践，不受 MMV 作者支持；启用前会强制检查运行环境、单一 regulation.bin 和中文层。`
-          : "管理器将恢复使用作者 .me3 中的 Server Redirector。原始 Mod 文件仍不会被修改；该模式只适用于干净的 Steam 正版目录。",
+          ? `管理器只会在生成的启动配置副本（active-nightreign.me3）中移除 Server Redirector，并改用游戏目录现有的 SeamlessCoop\\nrsc.dll。\n\n原始 Mod、作者启动配置、玩法数据文件（regulation.bin）和功能插件都不会被修改。此方式来自社区实践，不受 MMV 作者支持；启用前会强制检查运行环境、唯一玩法数据文件和中文层。`
+          : "管理器将恢复使用作者启动配置（.me3）中的 Server Redirector。原始 Mod 文件仍不会被修改；该模式只适用于干净的 Steam 正版目录。",
         confirmText: useCommunityMode ? "启用兼容模式" : "恢复作者模式",
         danger: useCommunityMode,
         onConfirm: async () => {
@@ -254,7 +300,7 @@ export function useModManager() {
                 ? "已启用社区 Seamless 兼容模式"
                 : "已恢复作者 Server Redirector 模式"
             );
-          }, "切换外部 Mod Profile 模式失败");
+          }, "切换外部 Mod 启动方式失败");
         },
       });
     },
@@ -272,17 +318,53 @@ export function useModManager() {
     }
 
     await runTask(async () => {
-      await invoke("add_external_mod", { path: selected });
+      const result = await invoke<ModInstallResult>("add_external_mod", { path: selected });
       await loadWorkspace();
-      pushToast("success", "外部 Mod 已添加到管理器");
+      pushToast(
+        "success",
+        !result.enabled && result.clothing.requiresAppearanceReset
+          ? "外部扩展服装已添加并保持停用；换回本体服装后再启用"
+          : result.clothing.detected && result.clothing.onlineSupport !== "complete"
+            ? "外部服装 Mod 已添加；_l 队友视角资源待检查"
+            : "外部 Mod 已添加到管理器"
+      );
     }, "添加外部 Mod 失败");
   }, [loadWorkspace, pushToast, runTask]);
+
+  const relinkExternalMod = useCallback(
+    async (mod: ModInfo) => {
+      const selected = await open({
+        directory: true,
+        title: `重新定位“${mod.name}”的文件夹`,
+      });
+      if (typeof selected !== "string") {
+        return;
+      }
+
+      await runTask(async () => {
+        const result = await invoke<ExternalModRelinkResult>("relink_external_mod", {
+          modId: mod.id,
+          path: selected,
+        });
+        await loadWorkspace();
+        pushToast(
+          "success",
+          result.clothing.detected
+            ? `已重新找到“${mod.name}”，并识别为${
+                result.clothing.kind === "expanded" ? "扩展服装" : "服装替换"
+              }`
+            : `已重新找到“${mod.name}”`
+        );
+      }, "重新定位外部 Mod 失败");
+    },
+    [loadWorkspace, pushToast, runTask]
+  );
 
   const addExternalDll = useCallback(async () => {
     const selected = await open({
       multiple: false,
-      title: "选择外部 DLL",
-      filters: [{ name: "DLL", extensions: ["dll"] }],
+      title: "选择外部功能插件（DLL）",
+      filters: [{ name: "功能插件 DLL", extensions: ["dll"] }],
     });
 
     if (typeof selected !== "string") {
@@ -292,8 +374,8 @@ export function useModManager() {
     await runTask(async () => {
       await invoke("add_external_dll", { path: selected });
       await loadWorkspace();
-      pushToast("success", "外部 DLL 已添加到管理器");
-    }, "添加外部 DLL 失败");
+      pushToast("success", "外部功能插件已添加到管理器");
+    }, "添加外部功能插件失败");
   }, [loadWorkspace, pushToast, runTask]);
 
   const readModConfig = useCallback(
@@ -372,9 +454,13 @@ export function useModManager() {
         await loadWorkspace();
         pushToast(
           "success",
-          result.zhocnLayoutNormalized
-            ? "Mod 已安装，汉化目录已规范为 msg\\zhocn"
-            : "Mod 已安装并通过目录结构检查"
+          !result.enabled && result.clothing.requiresAppearanceReset
+            ? "扩展服装已安全安装为停用；确认角色已换回本体服装后再启用"
+            : result.clothing.detected && result.clothing.onlineSupport !== "complete"
+              ? "服装 Mod 已安装；_l 队友视角资源待检查"
+              : result.zhocnLayoutNormalized
+                ? "Mod 已安装，汉化目录已规范为 msg\\zhocn"
+                : "Mod 已安装并通过目录结构检查"
         );
       }, "安装 Mod 失败");
     },
@@ -382,25 +468,64 @@ export function useModManager() {
   );
 
   const activateProfile = useCallback(
-    async (profile: Profile) => {
-      await runTask(async () => {
-        await invoke("activate_profile", { profileId: profile.id });
-        const desiredState = new Map(profile.mods.map((item) => [item.modId, item.enabled]));
+    (profile: Profile) => {
+      const desiredState = new Map(profile.mods.map((item) => [item.modId, item.enabled]));
+      const appearanceResetMods = mods.filter(
+        (mod) =>
+          mod.enabled &&
+          desiredState.get(mod.id) === false &&
+          mod.clothing.requiresAppearanceReset
+      );
+      const onlineViewRiskMods = mods.filter(
+        (mod) =>
+          !mod.enabled &&
+          desiredState.get(mod.id) === true &&
+          mod.clothing.detected &&
+          (mod.clothing.onlineSupport === "missing" || mod.clothing.onlineSupport === "partial")
+      );
+      const applyProfile = async () => {
+        await runTask(async () => {
+          await invoke("activate_profile", { profileId: profile.id });
 
-        for (const mod of mods) {
-          const desiredEnabled = desiredState.get(mod.id);
-          if (desiredEnabled !== undefined && desiredEnabled !== mod.enabled) {
-            if (isExternalMod(mod)) {
-              await invoke("toggle_external_mod", { modId: mod.id, enabled: desiredEnabled });
-            } else {
-              await invoke("toggle_mod", { modPath: mod.path, enabled: desiredEnabled });
+          for (const mod of mods) {
+            const desiredEnabled = desiredState.get(mod.id);
+            if (desiredEnabled !== undefined && desiredEnabled !== mod.enabled) {
+              if (isExternalMod(mod)) {
+                await invoke("toggle_external_mod", { modId: mod.id, enabled: desiredEnabled });
+              } else {
+                await invoke("toggle_mod", { modPath: mod.path, enabled: desiredEnabled });
+              }
             }
           }
-        }
 
-        await loadWorkspace();
-        pushToast("info", `已切换到“${profile.name}”`);
-      }, "切换方案失败");
+          await loadWorkspace();
+          pushToast("info", `已切换到“${profile.name}”`);
+        }, "切换方案失败");
+      };
+
+      if (appearanceResetMods.length > 0 || onlineViewRiskMods.length > 0) {
+        const sections = [];
+        if (appearanceResetMods.length > 0) {
+          sections.push(
+            `将停用扩展服装：${appearanceResetMods.map((mod) => mod.name).join("、")}。请先用当前方案进入游戏，把相关角色换回本体服装并正常退出。`
+          );
+        }
+        if (onlineViewRiskMods.length > 0) {
+          sections.push(
+            `将启用队友视角资源不完整的服装：${onlineViewRiskMods.map((mod) => mod.name).join("、")}。联机双方看到的外观可能不同。`
+          );
+        }
+        setConfirmState({
+          title: "切换方案前检查服装",
+          message: sections.join("\n\n"),
+          confirmText: "我已检查，切换方案",
+          danger: appearanceResetMods.length > 0,
+          onConfirm: applyProfile,
+        });
+        return;
+      }
+
+      void applyProfile();
     },
     [loadWorkspace, mods, pushToast, runTask]
   );
@@ -493,7 +618,7 @@ export function useModManager() {
         profilePath: artifacts.profilePath,
         content: artifacts.profileContent,
       };
-    }, "生成 ME3 profile 失败");
+    }, "生成启动配置失败");
   }, [pushToast, runTask]);
 
   const getLaunchArtifacts = useCallback(async () => {
@@ -516,7 +641,7 @@ export function useModManager() {
     const selected = await save({
       title: "导出双方联机一致性清单",
       defaultPath: "nightreign-multiplayer-manifest.json",
-      filters: [{ name: "Nightreign 联机清单", extensions: ["json"] }],
+      filters: [{ name: "Nightreign 联机一致性清单", extensions: ["json"] }],
     });
     if (typeof selected !== "string") {
       return;
@@ -529,14 +654,14 @@ export function useModManager() {
       );
       pushToast("success", "联机一致性清单已导出");
       return result;
-    }, "导出联机清单失败");
+    }, "导出联机一致性清单失败");
   }, [pushToast, runTask]);
 
   const compareMultiplayerManifest = useCallback(async () => {
     const selected = await open({
       multiple: false,
-      title: "选择好友导出的联机清单",
-      filters: [{ name: "Nightreign 联机清单", extensions: ["json"] }],
+      title: "选择好友导出的联机一致性清单",
+      filters: [{ name: "Nightreign 联机一致性清单", extensions: ["json"] }],
     });
     if (typeof selected !== "string") {
       return;
@@ -554,7 +679,7 @@ export function useModManager() {
           : `发现 ${result.differences.filter((item) => item.severity === "error").length} 项阻断差异`
       );
       return result;
-    }, "比较联机清单失败");
+    }, "比较联机一致性清单失败");
   }, [pushToast, runTask]);
 
   const stats = useMemo(() => {
@@ -587,6 +712,7 @@ export function useModManager() {
     deleteMod,
     setExternalProfileMode,
     addExternalMod,
+    relinkExternalMod,
     addExternalDll,
     readModConfig,
     writeModConfig,

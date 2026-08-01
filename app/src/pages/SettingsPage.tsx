@@ -60,34 +60,34 @@ export function SettingsPage({
     <PageFrame
       eyebrow="Settings"
       title="设置"
-      description="配置游戏目录、ME3 目录和可选启动程序。路径校验由 Rust 后端执行。"
+      description="告诉管理器游戏在哪、用哪个加载工具，以及你平时采用哪种联机方式。"
     >
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
         <section className="panel-card rounded-xl p-5">
-          <div className="section-label text-text-muted">Local paths</div>
+          <div className="section-label text-text-muted">游戏启动设置</div>
           <h2 className="mt-1 text-lg font-semibold text-text-primary">本机路径</h2>
           <div className="mt-5 divide-y divide-border">
             <PathField
-              label="游戏安装目录"
-              hint="必须包含 nightreign.exe"
+              label="游戏所在文件夹"
+              hint="请选择 Game 文件夹"
               value={draftGamePath}
-              placeholder="选择包含 nightreign.exe 的 Game 文件夹"
+              placeholder="选择安装目录中的 Game 文件夹"
               onChange={setDraftGamePath}
               onBrowse={selectGamePath}
             />
             <PathField
-              label="ME3 目录"
-              hint="包含 me3.exe 或 bin/me3.exe"
+              label="Mod 加载工具（ME3）"
+              hint="选择 ME3 文件夹"
               value={draftMe3Path}
               placeholder="选择 ME3 根目录或 bin 目录"
               onChange={setDraftMe3Path}
               onBrowse={selectMe3Path}
             />
             <PathField
-              label="启动程序"
-              hint="可选，留空时使用 nightreign.exe"
+              label="额外启动程序（可选）"
+              hint="通常保持默认即可"
               value={draftLaunchExePath}
-              placeholder="留空：nightreign.exe"
+              placeholder="留空：使用游戏主程序"
               onChange={setDraftLaunchExePath}
               onBrowse={selectLaunchExePath}
               onClear={() => setDraftLaunchExePath("")}
@@ -96,9 +96,9 @@ export function SettingsPage({
 
           <div className="mt-5 border-t border-border pt-5">
             <div className="mb-2 flex items-end justify-between gap-3">
-              <label className="text-sm font-semibold text-text-primary">运行环境</label>
+              <label className="text-sm font-semibold text-text-primary">你平时如何联机</label>
               <span className="text-xs text-text-muted">
-                检测：{runtimeEnvironmentStatus?.detected ?? "unknown"}
+                自动检测：{runtimeEnvironmentLabel(runtimeEnvironmentStatus?.detected)}
               </span>
             </div>
             <select
@@ -109,12 +109,12 @@ export function SettingsPage({
               className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-text-primary outline-none focus:border-accent/65"
             >
               <option value="auto">自动检测</option>
-              <option value="steam_official">纯正版 Steam（未实测）</option>
-              <option value="steam_seamless">正版 Steam + Seamless（未实测）</option>
-              <option value="spacewar_seamless">Spacewar + Seamless（已实测）</option>
+              <option value="steam_official">官方 Steam 游玩（未实测）</option>
+              <option value="steam_seamless">Steam + 社区联机插件（未实测）</option>
+              <option value="spacewar_seamless">社区联机：Spacewar + Seamless（已实测）</option>
             </select>
             <p className="mt-2 text-xs leading-5 text-warning">
-              当前仅 Spacewar + Seamless 完成真实环境回归。正版两种模式会使用更严格的门禁和保守启动参数。
+              当前只有“社区联机：Spacewar + Seamless”完成本机真实验证。它不能和官方 Steam 或作者指定的正版联机文件共用同一个 Game 目录。
             </p>
           </div>
 
@@ -138,12 +138,12 @@ export function SettingsPage({
         </section>
 
         <aside className="panel-card h-fit rounded-xl p-4">
-          <div className="section-label text-text-muted">Path rules</div>
+          <div className="section-label text-text-muted">选择提示</div>
           <h3 className="mt-1 text-sm font-semibold text-text-primary">选择提示</h3>
           <ol className="mt-4 space-y-4 text-xs leading-5 text-text-muted">
-            <li className="flex gap-3"><RuleNumber value="01" /><span>游戏目录选择包含 <b className="text-text-secondary">nightreign.exe</b> 的 Game 文件夹。</span></li>
-            <li className="flex gap-3"><RuleNumber value="02" /><span>ME3 可选择根目录，也可以直接选择 <b className="text-text-secondary">bin</b>。</span></li>
-            <li className="flex gap-3"><RuleNumber value="03" /><span>联机启动器会自动转换为 ME3 可用的游戏目标。</span></li>
+            <li className="flex gap-3"><RuleNumber value="01" /><span>选择游戏安装目录中的 <b className="text-text-secondary">Game</b> 文件夹；管理器会自动检查游戏主程序（nightreign.exe）。</span></li>
+            <li className="flex gap-3"><RuleNumber value="02" /><span>ME3 可以选择根目录，也可以直接选择 <b className="text-text-secondary">bin</b> 文件夹。</span></li>
+            <li className="flex gap-3"><RuleNumber value="03" /><span>不确定联机方式时先保持“自动检测”；不要把两种联机文件混放到同一个 Game 目录。</span></li>
           </ol>
         </aside>
       </div>
@@ -204,4 +204,15 @@ function PathField({
 
 function RuleNumber({ value }: { value: string }) {
   return <span className="display-number shrink-0 text-[10px] font-semibold text-accent">{value}</span>;
+}
+
+function runtimeEnvironmentLabel(value: string | undefined) {
+  const labels: Record<string, string> = {
+    auto: "自动检测",
+    steam_official: "官方 Steam 游玩",
+    steam_seamless: "Steam + 社区联机插件",
+    spacewar_seamless: "社区联机（Spacewar + Seamless）",
+    unknown_mixed: "需要确认的混合环境",
+  };
+  return value ? labels[value] ?? value : "尚未检测";
 }

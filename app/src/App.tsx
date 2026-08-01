@@ -74,8 +74,6 @@ function App() {
             onPreflight={manager.runLaunchPreflight}
             onRefresh={manager.refresh}
             onOpenDiagnostics={() => setCurrentPage("diagnostics")}
-            onPrepareOnline={manager.installSeamlessOnlinefix}
-            onRestoreOnline={manager.restoreOnlinePatchBackup}
           />
         )}
 
@@ -87,6 +85,7 @@ function App() {
             onToggle={manager.toggleMod}
             onDelete={manager.deleteMod}
             onProfileMode={manager.setExternalProfileMode}
+            onRelink={manager.relinkExternalMod}
             onRefresh={manager.refresh}
             onInstallZip={manager.installZip}
             onAddExternalMod={manager.addExternalMod}

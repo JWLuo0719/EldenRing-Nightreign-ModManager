@@ -47,7 +47,7 @@ export function ProfilesPage({
 
   return (
     <PageFrame
-      eyebrow="Profiles"
+      eyebrow="Loadouts"
       title="配置方案"
       description="方案保存 Mod 启用快照和加载顺序。拖拽右侧条目可以调整当前方案的加载顺序。"
     >
@@ -165,7 +165,7 @@ export function ProfilesPage({
                         {mod?.name ?? item.modId}
                       </div>
                       <div className="mt-1 text-xs text-text-muted">
-                        {mod?.type === "native" ? "DLL" : "资源包"}
+                        {mod?.type === "native" ? "功能插件" : "资源型 Mod"}
                       </div>
                     </div>
                     <span

@@ -198,6 +198,46 @@ pub fn update_active_profile_mod(mod_id: String, enabled: bool) -> Result<Option
     Ok(Some(profile))
 }
 
+pub fn replace_mod_id_in_all_profiles(old_mod_id: &str, new_mod_id: &str) -> Result<usize, String> {
+    if old_mod_id == new_mod_id {
+        return Ok(0);
+    }
+
+    let mut updated = 0;
+    for mut profile in get_profiles() {
+        if replace_mod_id_in_profile(&mut profile, old_mod_id, new_mod_id) {
+            save_profile(&profile)?;
+            updated += 1;
+        }
+    }
+    Ok(updated)
+}
+
+fn replace_mod_id_in_profile(profile: &mut Profile, old_mod_id: &str, new_mod_id: &str) -> bool {
+    let Some(old_index) = profile
+        .mods
+        .iter()
+        .position(|item| item.mod_id == old_mod_id)
+    else {
+        return false;
+    };
+
+    if let Some(new_index) = profile
+        .mods
+        .iter()
+        .position(|item| item.mod_id == new_mod_id)
+    {
+        let old = profile.mods[old_index].clone();
+        let new = &mut profile.mods[new_index];
+        new.enabled |= old.enabled;
+        new.load_order = new.load_order.min(old.load_order);
+        profile.mods.remove(old_index);
+    } else {
+        profile.mods[old_index].mod_id = new_mod_id.to_string();
+    }
+    true
+}
+
 pub fn load_profile(profile_id: &str) -> Result<Profile, String> {
     let file_path = get_profile_path(profile_id)?;
 
@@ -232,7 +272,7 @@ fn chrono_now() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_profile_id;
+    use super::{replace_mod_id_in_profile, validate_profile_id, Profile, ProfileMod};
 
     #[test]
     fn accepts_generated_profile_ids() {
@@ -243,5 +283,35 @@ mod tests {
     fn rejects_profile_path_traversal() {
         assert!(validate_profile_id(r"..\..\outside").is_err());
         assert!(validate_profile_id("profile_/outside").is_err());
+    }
+
+    #[test]
+    fn relinking_mod_id_preserves_state_and_merges_duplicates() {
+        let mut profile = Profile {
+            id: "profile_1".to_string(),
+            name: "测试".to_string(),
+            description: String::new(),
+            icon: String::new(),
+            mods: vec![
+                ProfileMod {
+                    mod_id: "old".to_string(),
+                    enabled: true,
+                    load_order: 2,
+                },
+                ProfileMod {
+                    mod_id: "new".to_string(),
+                    enabled: false,
+                    load_order: 5,
+                },
+            ],
+            is_active: true,
+            created_at: "1".to_string(),
+        };
+
+        assert!(replace_mod_id_in_profile(&mut profile, "old", "new"));
+        assert_eq!(profile.mods.len(), 1);
+        assert_eq!(profile.mods[0].mod_id, "new");
+        assert!(profile.mods[0].enabled);
+        assert_eq!(profile.mods[0].load_order, 2);
     }
 }

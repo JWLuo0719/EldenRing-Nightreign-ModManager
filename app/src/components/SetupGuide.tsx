@@ -130,7 +130,7 @@ export function SetupGuide({
 
         <div className="panel-card mt-6 rounded-xl p-4 text-sm leading-6 text-text-secondary">
           SeamlessCoop/Spacewar 环境下，即使这里选择过 nrsc_launcher.exe，ME3 启动链路也会自动改用
-          nightreign.exe，并通过 profile 注入 SeamlessCoop/nrsc.dll。
+          nightreign.exe，并通过启动配置加载 SeamlessCoop/nrsc.dll。高级技术详情中会显示对应 Profile。
         </div>
 
         <div className="mt-8 flex justify-end">

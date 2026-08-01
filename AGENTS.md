@@ -138,7 +138,13 @@ Rust command 当前注册在 `app/src-tauri/src/lib.rs`，主要分两组：
 
 ## 已验证成功的启动链路
 
-本轮关键结果：用户确认游戏已成功启动，Mod 也已成功加载。
+本轮关键结果：用户确认游戏已成功启动，Mod 也已成功加载。2026-08-01 又完成
+Spacewar + Seamless 社区路线的真实阶段验收：MMV + Weapons package、602 简中和
+early-load `nrsc.dll` 可以同时工作；服务器登录和 Steam 好友邀请可用，新增武器与
+简中名称/词条可见，并实际进入本体原先没有的白金之子主城。关闭 602 后新增武器和
+主城仍存在但文本退回 `?WeaponName?`、`ArtsName(...)` 等占位符，证明玩法 package
+与中文层可独立启停。尚未完成第二位玩家实际加入同房后的双人实战，不得把“可邀请”
+扩大表述成“双人联机已验收”。
 
 成功链路不是把 `nrsc_launcher.exe` 直接交给 ME3，而是：
 
@@ -147,7 +153,7 @@ Rust command 当前注册在 `app/src-tauri/src/lib.rs`，主要分两组：
 -> generate_me3_profile()
 -> 写入 active-nightreign.me3
 -> 写入 launch\launch-nightreign.bat
--> cmd /K launch-nightreign.bat，使用 CREATE_NEW_CONSOLE 打开独立控制台
+-> 后台 cmd /C launch-nightreign.bat，输出写入 last-launch.log
 -> me3.exe launch --exe nightreign.exe --skip-steam-init --online --game nightreign -p active-nightreign.me3
 -> ME3 注入并加载 profile 中的 packages/natives
 -> SeamlessCoop/nrsc.dll、nighter.dll 和资源包 Mod 生效
@@ -171,10 +177,13 @@ cd /d "{me3_path}\bin"
 - MMV Server Redirector 必须改用 `--online --game nightreign`，不得追加 `--skip-steam-init`，否则会跳过 Redirector 所依赖的正版 Steam 身份初始化。
 - 普通正版 Mod 方案默认使用 `NR0000.nmm`，避免写入官方 `NR0000.sl2`。Seamless 存档名从 `nrsc_settings.ini` 的 `save_file_extension` 推断，默认 `NR0000.co2`。每次实际启动和诊断启动前都应备份当前有效存档及 `.bak`。
 - Spacewar + Seamless 实测证明，ME3 Profile 中自定义 `savefile` 不能可靠隔离 Seamless 存档：即使 ME3 日志接受其他文件名，游戏仍会写入 `nrsc_settings.ini` 决定的 `NR0000.co2`。管理器必须按真实 Seamless 文件备份，不得把作者 Profile 的 `savefile` 描述为隔离保证。
-- 切换或移除玩法 `regulation.bin` 后，旧存档可能保留已变化的武器/装备 ID，表现为人物或武器不显示。当前完整 MMV + Weapons + 602 + Seamless 方案已用新角色验证显示正常，而同一方案下原 `NR0000.co2` 仍异常，因此启动前应比较上次玩法指纹、警告存档兼容风险并做哈希回读备份；不能用“资源已成功加载”推断旧存档兼容。
+- 人物不显示时先检查当前服装/外观 ID：本项目实测女爵空白且切换后无法切回，是存档选择了“更多服装”提供、游戏本体不存在的服装；换回本体默认或本体已有服装即恢复，并非 MMV、Seamless、602、面具 Mod 残留或存档主体损坏。切换/移除玩法 `regulation.bin` 后仍可能另有武器/装备 ID 风险，因此比较两套 Mod 时仍须每轮恢复同源 `NR0000.co2` 与 `.bak`、回读 SHA-256 后只改变一个变量。
 - 不要再使用 `cmd /C start "Nightreign-ME3" ...` 这类写法。Windows 对 `start` 的 title 参数解析容易导致类似找不到 `VNightreign-ME3\` 或 `WNightreign-ME3\` 的错误。
-- 当前稳定写法是生成 bat，然后 `cmd /K <bat>`，并通过 Windows `CREATE_NEW_CONSOLE` 打开独立控制台。
-- 从 `dev.bat` 启动 Tauri 后，ME3 输出不一定会出现在原终端。启动诊断应优先看 `launch\last-launch.log` 和独立控制台。
+- 当前稳定写法是生成 bat，然后以 `cmd /C <bat>` 和 Windows `CREATE_NO_WINDOW` 在后台执行。
+  终端不会显示给玩家，也会在 ME3 启动流程结束后自动退出；排错优先读取
+  `launch\\last-launch.log` 和诊断页，不要恢复 `/K` 或可见独立控制台。
+- 从 `dev.bat` 启动 Tauri 后，ME3 输出不一定会出现在原终端。启动诊断应优先看
+  `launch\last-launch.log` 和诊断页；不要依赖或要求玩家保留可见控制台。
 
 当前生成的 `.me3` 关键形态：
 
@@ -232,8 +241,20 @@ load_before = []
 - OnlineFix/Spacewar 补丁安装只允许 `spacewar_seamless` 环境，且 Steam AppManifest 对应的正版目录必须硬阻止。覆盖前备份固定受管文件，复制失败自动回滚，并提供按清单恢复最近备份的命令；不得扫描或删除清单外文件。
 - 生成 `active-nightreign.me3` 时优先按 active profile 中 enabled 的 Mod 和 `loadOrder` 排序；如果 active profile 没有启用项，则回退到目录级 enabled 状态。
 - package/native 去重时必须保留顺序，不能改成纯排序输出，否则会破坏 profile 加载顺序。
+- 外部 Mod ID 由规范化路径派生。目录改名或移动后，管理器必须明确显示路径失效，
+  禁止“启用但生成零 package”的静默失败；重新定位时要同步迁移所有配置方案中的旧 ID。
+- 任意启动方案同时出现多份根级 `regulation.bin` 都必须在启动前检查、普通启动和诊断
+  启动三处硬阻止。加载顺序只能覆盖，不能合并；只有参数级合并后的单一文件才能作为
+  MMV、Weapons、扩展服装等玩法数据的兼容产物。
+- 服装 Mod 结构检查按 `am_/bd_/hd_/lg_/fc_/hr_*.partsbnd.dcx` 识别本机资源，并把同名
+  `_l.partsbnd.dcx` 视为队友视角资源。纯 parts 替换标记为“服装替换”；同时含
+  `regulation.bin` 的包标记为“扩展服装”，因为停用后存档可能仍引用新增外观 ID。
+  管理器不得自动执行 Mod 附带的 BAT/CMD/PS1/EXE 来生成 `_l` 文件，只能报告结构与
+  缺失配对。扩展服装 ZIP 安装或首次外部目录注册后默认保持停用；启停或切换配置方案前必须提示玩家先
+  换回本体服装。该提示是风险门槛，不得描述为已经修复或清理了存档中的外观 ID。
 - 外部 MMV 作者 Profile 可以显式选择 `mmv_seamless_community` 社区兼容模式。它不是作者官方支持路线，只能在生成的 `active-nightreign.me3` 副本中移除 `cl_server_redirector.dll`，再使用游戏目录现有的 `SeamlessCoop\nrsc.dll`；原 `.me3`、DLL、package 和 `regulation.bin` 必须保持只读。该模式只允许明确的 Steam + Seamless 或 Spacewar + Seamless 环境，并要求恰好一个 package 根级 `regulation.bin`。
 - MMV 社区兼容模式的启动前检查必须显示玩法 `regulation.bin` 和简中 `item/menu_dlc01.msgbnd.dcx` 的 SHA-256；完整 `msg\zhocn` 覆盖层只能启用一份。602 与 559 覆盖同一文本集合，不得同时启用。602 当前主文件上传于 2026-07-22（314 KB），Changelog 明确标注同步 2.1.7.1；页面顶部仍显示 2.1.6，因此版本判断应同时记录上传日期、Changelog 和文件哈希，不能只读顶部版本号。
+- 602 的 `menu_dlc01.msgbnd.dcx` 自带 MMV/Weapons 版本署名；标题画面页脚出现“MMV 2.1.7.1 / 武器模组兼容补丁”只证明 602 菜单文本被覆盖，不能证明 MMV package 或 `regulation.bin` 已加载。判断实际加载项必须读取生成 Profile 和本轮 ME3 日志。
 - 双方联机一致性清单必须脱敏，不得包含绝对路径、Windows 用户名、账号目录或存档内容。比较范围包括 package 完整目录树 SHA-256、package/native 加载顺序、`regulation.bin`、完整简中层、native 的 `load_early`、游戏/Spacewar 关键二进制和 `nrsc_settings.ini` 指纹。`OnlineFix.ini`、`steam_emu.ini` 可能包含本机身份信息，不进入清单。
 - 大型 package 清单通过 blocking worker 读取完整内容；当前 2.74 GB MMV + Weapons 实测约需 81 秒。不得用目录修改时间或文件名代替内容哈希来宣称双方一致；未来增加缓存时，缓存键也必须能证明文件内容未变化。
 
@@ -249,10 +270,19 @@ load_before = []
 - 应用内 toast 和确认弹层，删除前确认。
 - ZIP 安装到 `{game_path}\mods\`，带单根目录剥离、安全路径检查、重复目录自动编号。
 - ZIP 的单根目录剥离只能移除真实包装目录；`parts`、`chr`、`map`、`msg`、`zhocn` 等游戏语义根和单个 `regulation.bin` 必须保留。完整汉化若以 `zhocn\item/menu_dlc01.msgbnd.dcx` 或两个文件直接位于压缩包根提供，安装时规范到 `msg\zhocn\`；多套或半套布局应取消安装，不能猜覆盖顺序。
+- Mod 卡片和启动前检查已显示服装结构、玩法数据风险与 `_l` 队友视角完整度；技术原词
+  收进可折叠高级详情。玩家界面统一优先使用“启动配置 / 资源型 Mod / 功能插件 /
+  玩法数据文件 / 联机一致性清单”，并在需要排错时保留 `Profile / package / native /
+  regulation.bin / manifest` 对照。
 - Rust 后端：配置读写、Mod 扫描、profile JSON 存储、ME3 profile 生成、bat 启动脚本、启动日志。
 - 诊断页已支持生成/查看 profile、启动脚本、日志、启动诊断和真实文件级冲突分析。
 - 诊断页已支持导出和比较脱敏联机清单：同一总体指纹表示双方关键 package、DLL、加载顺序、游戏运行时与 Seamless 设置一致；导入文件超过 2 MB、schema 不支持或总体指纹与内容不符时会拒绝。
 - 启动台已支持不会真正启动游戏的启动前检查，检查游戏/ME3/启动目标、Steam、残留进程、联机组件、深夜解锁和启用 Mod；`error` 阻止启动，`warning` 只提醒。
+- 启动台必须优先展示玩家可理解的检查结论和“下一步”操作，原始路径、文件名、版本和
+  后端错误只放到可展开的“系统详情”。“启动说明”窗口解释启动顺序、红黄状态和常用
+  名词；新增检查项时同步补充对应的玩家标题、影响和修复动作。
+- `install_seamless_onlinefix` 与恢复命令暂保留作内部/后续修复能力，但“应用联机补丁”及
+  其备份恢复入口已从启动台隐藏。在得到完整事务和真实发布回归前不得重新暴露给普通用户。
 - 配置方案页已支持拖拽调整已记录 Mod 的加载顺序。
 - `last-launch.log` 超过 2 MB 时轮转为 `last-launch.log.1`；诊断页最多读取日志末尾 512 KB，避免把无限增长的日志整体复制进 WebView。
 
@@ -269,6 +299,11 @@ load_before = []
 
 后续功能方向：
 
+- 服装结构识别、扩展服装默认停用、启停/方案切换提醒和 `_l` 配对检查已经完成；下一步
+  用更多真实服装 ZIP 覆盖不同部位命名、包装层级、半套 `_l` 和多个玩法数据文件组合，
+  再评估是否需要由管理器安全复制 `_l`。在明确事务、冲突和回滚规则前仍不得执行作者脚本。
+- 玩家化术语和高级技术对照已覆盖主要页面；后续新增页面继续沿用，不要退回只显示
+  package/native/regulation/Profile/manifest 的作者术语。
 - 为联机清单增加增量缓存、进度与取消，并在真实双端测试后补充一键修复建议；现有实现已经能精确列出 package、DLL、玩法参数、中文层、运行时文件和 Seamless 设置差异。
 - 对安装包结构、缺失依赖、无法识别的文件类型给出明确健康提示，避免只显示“已启用”却实际未生效。
 - 支持更直观的 Mod 添加/移出方案和批量状态更新。

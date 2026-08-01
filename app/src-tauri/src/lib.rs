@@ -16,6 +16,7 @@ pub fn run() {
             mod_manager::get_mod_info,
             mod_manager::install_mod_from_zip,
             mod_manager::add_external_mod,
+            mod_manager::relink_external_mod,
             mod_manager::add_external_dll,
             mod_manager::remove_external_mod,
             mod_manager::toggle_external_mod,

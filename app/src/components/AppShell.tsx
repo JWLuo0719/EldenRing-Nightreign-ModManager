@@ -37,7 +37,7 @@ const navItems: Array<{
   {
     key: "diagnostics",
     label: "诊断",
-    description: "Profile、命令、日志",
+    description: "启动配置、命令、日志",
     icon: <TerminalIcon />,
   },
   {
@@ -60,7 +60,7 @@ export function AppShell({
     <div className="flex min-h-0 flex-1 text-text-primary">
       <aside className="flex w-[13.5rem] shrink-0 flex-col border-r border-border bg-panel/95">
         <div className="border-b border-border px-4 py-4">
-          <div className="section-label text-text-muted">Active loadout</div>
+          <div className="section-label text-text-muted">当前方案</div>
           <div className="mt-2 flex items-center gap-3">
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-accent/25 bg-accent-soft text-sm font-bold text-accent">
               {activeProfileName.slice(0, 1).toUpperCase()}

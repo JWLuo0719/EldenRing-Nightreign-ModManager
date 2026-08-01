@@ -1,6 +1,8 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ModCard } from "../components/ModCard";
+import { TechnicalGlossary } from "../components/TechnicalGlossary";
+import { playerTerms } from "../lib/terminology";
 import type { ModInfo, Profile } from "../types/mod";
 import { PageFrame } from "./LaunchPage";
 
@@ -11,6 +13,7 @@ interface ModsPageProps {
   onToggle: (mod: ModInfo) => void;
   onDelete: (mod: ModInfo) => void;
   onProfileMode: (mod: ModInfo) => void;
+  onRelink: (mod: ModInfo) => void;
   onRefresh: () => void;
   onInstallZip: (zipPath: string) => Promise<void>;
   onAddExternalMod: () => Promise<void>;
@@ -19,7 +22,7 @@ interface ModsPageProps {
   onWriteConfig: (path: string, content: string) => Promise<void>;
 }
 
-type FilterType = "all" | "package" | "native" | "enabled" | "disabled";
+type FilterType = "all" | "package" | "native" | "clothing" | "enabled" | "disabled";
 
 export function ModsPage({
   mods,
@@ -28,6 +31,7 @@ export function ModsPage({
   onToggle,
   onDelete,
   onProfileMode,
+  onRelink,
   onRefresh,
   onInstallZip,
   onAddExternalMod,
@@ -52,6 +56,7 @@ export function ModsPage({
         filterType === "all" ||
         (filterType === "enabled" && mod.enabled) ||
         (filterType === "disabled" && !mod.enabled) ||
+        (filterType === "clothing" && mod.clothing.detected) ||
         mod.type === filterType;
       return matchesSearch && matchesType;
     });
@@ -111,7 +116,7 @@ export function ModsPage({
     <PageFrame
       eyebrow="Mod Library"
       title="Mod 仓库"
-      description="扫描 Game\\mods，注册外部 Mod/DLL，并保留可识别的作者 ME3 Profile 语义。"
+      description="安装和管理资源型 Mod、功能插件与外部目录；高风险服装会显示存档和联机提示。"
     >
       <div className="flex min-h-0 flex-1 flex-col gap-4">
         <section className="panel-card shrink-0 rounded-xl p-4">
@@ -166,7 +171,7 @@ export function ModsPage({
                 onClick={() => void onAddExternalDll()}
                 className="rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:border-accent/45 hover:text-text-primary disabled:opacity-50"
               >
-                添加外部 DLL
+                添加功能插件
               </button>
               <button
                 type="button"
@@ -182,8 +187,8 @@ export function ModsPage({
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <CompactStat label="全部" value={String(mods.length)} />
             <CompactStat label="启用" value={String(mods.filter((mod) => mod.enabled).length)} />
-            <CompactStat label="资源包" value={String(mods.filter((mod) => mod.type === "package").length)} />
-            <CompactStat label="DLL" value={String(mods.filter((mod) => mod.type === "native").length)} />
+            <CompactStat label={playerTerms.package} value={String(mods.filter((mod) => mod.type === "package").length)} />
+            <CompactStat label={playerTerms.native} value={String(mods.filter((mod) => mod.type === "native").length)} />
           </div>
 
           {conflicts.length > 0 && (
@@ -195,10 +200,14 @@ export function ModsPage({
 
           {communityCompatibilityActive && (
             <div className="mt-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
-              已启用社区 Seamless 兼容模式：只改写生成的 ME3 Profile，不修改或重发作者文件。
-              启动前检查会验证单一 regulation.bin、完整中文层和文件指纹。
+              已启用社区 Seamless 兼容模式：只改写本次启动配置，不修改或重发作者文件。
+              启动前会检查唯一玩法数据文件、完整中文层和文件指纹；技术详情为 ME3 Profile / regulation.bin。
             </div>
           )}
+
+          <div className="mt-3">
+            <TechnicalGlossary />
+          </div>
         </section>
 
         <section className="panel-card flex min-h-0 flex-1 flex-col rounded-xl">
@@ -225,6 +234,7 @@ export function ModsPage({
                     onDelete={onDelete}
                     onConfigure={openConfigEditor}
                     onProfileMode={onProfileMode}
+                    onRelink={onRelink}
                   />
                 ))}
               </div>
@@ -257,8 +267,9 @@ const filterItems: Array<{ key: FilterType; label: string }> = [
   { key: "all", label: "全部" },
   { key: "enabled", label: "启用" },
   { key: "disabled", label: "停用" },
-  { key: "package", label: "资源包" },
-  { key: "native", label: "DLL" },
+  { key: "clothing", label: "服装" },
+  { key: "package", label: "资源型 Mod" },
+  { key: "native", label: "功能插件" },
 ];
 
 function getPotentialConflicts(mods: ModInfo[]) {
