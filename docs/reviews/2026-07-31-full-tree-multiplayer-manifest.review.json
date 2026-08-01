@@ -102,9 +102,20 @@
                                        ],
                           "note":  "Reused the rule that generated launch artifacts and complete file content are the source of truth. Added stale external-path recovery and a hard multi-regulation launch gate instead of diagnosing from in-game appearance alone.",
                           "recoveryMinutes":  25
+                      },
+                      {
+                          "id":  "reuse-81b677f137a7",
+                          "appliedAt":  "2026-08-02",
+                          "context":  "EldenRing-Nightreign-ModManager: SkinOverhaul 中文文本候选审计",
+                          "outcome":  "validated",
+                          "evidence":  [
+                                           "从 Nexus 官方文件页下载 ERN VINS CN 1.5，记录 318908 字节与 SHA-256 103CF4A6...ACD1A836",
+                                           "解包确认候选同时覆盖 item_dlc01 与 menu_dlc01，且与 602 哈希不同，未直接安装"
+                                       ],
+                          "note":  "复用完整内容与哈希优先于文件名/中文标签的规则，避免把完整覆盖层误判为可叠加的小补丁。"
                       }
                   ],
-    "reuseCount":  2,
+    "reuseCount":  3,
     "outcomeAfterReuse":  "validated",
     "lastValidatedAt":  "2026-08-02"
 }

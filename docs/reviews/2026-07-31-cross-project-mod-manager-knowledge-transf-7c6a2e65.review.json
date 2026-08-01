@@ -88,9 +88,20 @@
                                        ],
                           "note":  "知识检索实际改变了清单的完整性校验、脱敏和真实样本验收边界。",
                           "recoveryMinutes":  15
+                      },
+                      {
+                          "id":  "reuse-290433daf7ba",
+                          "appliedAt":  "2026-08-02",
+                          "context":  "EldenRing-Nightreign-ModManager: SkinOverhaul 中文文本候选审计",
+                          "outcome":  "validated",
+                          "evidence":  [
+                                           "先核对作者翻译页与官方文件版本，再下载真实小样本",
+                                           "WitchyBND 条目级比对发现 76 个 Skin 自定义 GoodsName 中仅 8 个在候选包内真正中文化"
+                                       ],
+                          "note":  "复用作者页面、真实样本、条目级证据三层验证；结果推翻了仅凭 Mandarin 标签即可兼容 SkinOverhaul 的假设。"
                       }
                   ],
-    "reuseCount":  1,
+    "reuseCount":  2,
     "outcomeAfterReuse":  "validated",
-    "lastValidatedAt":  "2026-07-31"
+    "lastValidatedAt":  "2026-08-02"
 }

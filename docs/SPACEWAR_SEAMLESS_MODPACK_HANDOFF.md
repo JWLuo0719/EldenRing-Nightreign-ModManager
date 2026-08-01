@@ -253,8 +253,11 @@ D:\Game\ELDEN RING NIGHTREIGN\mods\5.30 NightreignPLUS
 D:\Game\ELDEN RING NIGHTREIGN\mods\SkinOverhaul
 ```
 
-本专项目标暂不包含 Skin。该目录包含旧 MMV + Skin 合并 regulation，不是干净的
-独立 Skin 包，必须保持停用，不能拿它覆盖新的玩法整合。
+该目录包含旧 MMV + Skin 合并 regulation，不是可直接叠加到当前 MMV 2.1.7.1 的
+干净服装包，不能拿它覆盖新的玩法整合。2026-08-02 用户已用 Skin-only + Seamless
+方案确认新增服装列表和人物模型可正常显示；第二位玩家观察 `_l` 的联机外观仍未验收。
+中文界面下新增条目显示 `?GoodsName?`，因为包内只有
+`msg\engus\item_dlc01.msgbnd.dcx`，没有 `msg\zhocn`。
 
 ## 中文层已知边界
 
@@ -269,6 +272,14 @@ D:\Game\ELDEN RING NIGHTREIGN\mods\SkinOverhaul
 
 如果候选社区整合本身包含中文，仍要查清它基于 602、559、自制翻译还是旧版文本，
 不能再叠加另一份汉化。
+
+服装中文候选也必须做条目级比对。公开的 `ERN VINS CN 1.5` ZIP（318,908 字节，
+SHA-256 `103CF4A60E44F9754529ABE494F77C2043FA3301C54DC85F94064994ACD1A836`）同时覆盖
+完整 `item_dlc01` 和 `menu_dlc01`；它与 602 哈希不同。对当前 Skin 的 76 个新增
+`GoodsName`，该候选仅有 50 个 ID，真正中文化 8 个，另有 42 个英文和 26 个缺失。
+它只能作为 ID/名称研究样本，不能作为可用中文补丁安装。兼容路线应以 602 的
+`item_dlc01` 为底合入全部 76 个服装名，保留 602 的 `menu_dlc01`，避免覆盖已验收的
+MMV/Weapons 中文层。
 
 本机当前两份停用汉化均来自 2026-05-29：一份把两个文件直接放在 package 根，
 另一份缺少标准 `msg\zhocn` 层。它们早于 602 的 2026-07-22 当前主文件，不能

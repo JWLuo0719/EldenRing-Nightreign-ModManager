@@ -61,9 +61,23 @@
   样本仍识别为 5 个纯替换 parts、无 regulation。由于当前 MMV/Skin 尚无适配
   2.1.7.1 的单一合并 regulation，本阶段没有再次启动游戏宣称服装已生效。
 
-下一步应二选一验证：先用 Skin-only + Seamless 独立方案确认服装选择和 `_l` 联机
-视角；或通过可审计的参数级合并生成适配当前 MMV 2.1.7.1 的唯一
-`regulation.bin`。不得用加载顺序或简单覆盖冒充合并。
+用户随后完成 Skin-only + Seamless 真实启动：新增服装列表和人物模型均正常显示，
+证明 Skin package、regulation 与本机服装 parts 已实际加载；本轮尚未由第二位玩家
+观察 `_l` 队友视角，不能把本机模型成功扩大表述为联机外观已验收。中文界面下新增
+条目全部显示 `?GoodsName?`，原因也已由文件结构确认：Skin 只提供
+`msg\engus\item_dlc01.msgbnd.dcx`，没有 `msg\zhocn`。
+
+2026-08-02 又审计了公开候选 `ERN VINS CN 1.5`：Nexus 下载 ZIP 为 318,908 字节，
+SHA-256 `103CF4A60E44F9754529ABE494F77C2043FA3301C54DC85F94064994ACD1A836`；包内同时
+含完整 `zhocn/item_dlc01.msgbnd.dcx` 与 `menu_dlc01.msgbnd.dcx`，不是可直接叠加的
+“服装名称小补丁”。WitchyBND 条目级比对显示，Skin 当前英文包相对 602 新增 76 个
+`GoodsName`：该候选只有 50 个对应 ID，其中仅 8 个已写成中文、42 个仍是英文、
+26 个完全缺失。因此不得安装它替换 602，也不能宣称已经找到可用的 Skin 简中补丁。
+正确下一步是以当前 602 的 `item_dlc01` 为底，只合入这 76 个服装名称并重新打包；
+`menu_dlc01` 继续原样使用 602。自制翻译和上游翻译文本必须区分来源与授权。
+
+MMV + Skin 仍需要通过可审计的参数级合并生成适配当前 MMV 2.1.7.1 的唯一
+`regulation.bin`，不得用加载顺序或简单覆盖冒充合并。
 
 ### 启动与诊断
 
