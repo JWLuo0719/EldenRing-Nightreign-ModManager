@@ -350,6 +350,19 @@ Spacewar + Seamless，并因 MMV Server Redirector 环境错配而阻止启动�
   `01_Online.bat`。验证没有运行 BAT，也没有改变任何 Mod 启停状态。
 - 验证命令均通过：`cargo fmt --all -- --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo check`、`cargo test`（41 passed，7 ignored）、真实服装样本 ignored test、`npm run lint`、`npm run build`。
 
+2026-08-02 根据实际界面截图修正了一处分类误判：MMV package 虽含
+`bd/hd_m_6030` 两组本机与 `_l` 人物部件，但同时包含 `map/chr/event/action/script/sfx`
+等完整玩法目录，不应显示为“扩展服装”，更不应要求玩家在停用 MMV 前换回本体服装。
+扫描器现在先判断 package 语义：大型玩法整合包仍接受玩法数据和文件冲突检查，但不进入
+服装筛选、服装标签或外观 ID 存档提示。缩小测试和真实 MMV 目录测试均已通过；
+SkinOverhaul 仍识别为 228 组扩展服装，女爵去面罩仍识别为纯服装替换。
+
+用户确认 SkinOverhaul 实际位置为
+`D:\Game\ELDEN RING NIGHTREIGN\mods\SkinOverhaul`。本机外部注册记录已从错误的
+`Skin Overhaul` 修正为该路径，并同步迁移非当前配置方案中的路径派生 Mod ID；保持停用，
+未启动游戏。运行中的旧窗口需要刷新；若不是 Tauri dev 热重载实例，则需重新启动新构建
+才能看到 MMV 分类修正。
+
 ### 2026-08-01 启动体验与检查指引
 
 - 旧启动路径使用 `cmd /K` 和 `CREATE_NEW_CONSOLE`，因此会弹出终端并在游戏退出后停留在

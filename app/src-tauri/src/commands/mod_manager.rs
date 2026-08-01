@@ -5162,13 +5162,23 @@ fn analyze_clothing_mod(path: &Path) -> ClothingModInfo {
     let mut state = ClothingScanState::default();
     collect_clothing_files(path, path, &mut state, 0);
 
-    let detected = !state.local_parts.is_empty() || !state.online_parts.is_empty();
+    let has_clothing_parts = !state.local_parts.is_empty() || !state.online_parts.is_empty();
+    let broad_gameplay_package = has_broad_gameplay_content(path);
+    let detected = has_clothing_parts && !broad_gameplay_package;
     if !detected {
         return ClothingModInfo {
             kind: "none".to_string(),
             online_support: "not_applicable".to_string(),
             has_regulation: state.has_regulation,
             has_manual_online_setup: state.has_manual_online_setup,
+            warnings: if has_clothing_parts && broad_gameplay_package {
+                vec![format!(
+                    "大型玩法整合包内含 {} 个服装格式资源；不按服装 Mod 分类，仍由玩法数据与文件冲突检查负责兼容性判断",
+                    state.local_parts.len() + state.online_parts.len()
+                )]
+            } else {
+                Vec::new()
+            },
             ..ClothingModInfo::default()
         };
     }
@@ -5245,6 +5255,13 @@ fn analyze_clothing_mod(path: &Path) -> ClothingModInfo {
         appearance_ids: state.appearance_ids.into_iter().collect(),
         warnings,
     }
+}
+
+fn has_broad_gameplay_content(path: &Path) -> bool {
+    const GAMEPLAY_ROOTS: &[&str] = &["action", "asset", "chr", "event", "map", "script", "sfx"];
+    [path.to_path_buf(), path.join("mod")]
+        .iter()
+        .any(|root| GAMEPLAY_ROOTS.iter().any(|name| root.join(name).is_dir()))
 }
 
 fn safe_initial_mod_enabled(clothing: &ClothingModInfo) -> bool {
@@ -5490,6 +5507,40 @@ mod tests {
     }
 
     #[test]
+    fn does_not_classify_large_gameplay_package_as_clothing_mod() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mixed_gameplay_package_test_{}",
+            current_timestamp()
+        ));
+        let package = root.join("mod");
+        fs::create_dir_all(package.join("parts")).unwrap();
+        fs::create_dir_all(package.join("map")).unwrap();
+        fs::create_dir_all(package.join("chr")).unwrap();
+        fs::write(package.join("regulation.bin"), b"gameplay").unwrap();
+        fs::write(
+            package.join("parts").join("bd_m_6030.partsbnd.dcx"),
+            b"local",
+        )
+        .unwrap();
+        fs::write(
+            package.join("parts").join("bd_m_6030_l.partsbnd.dcx"),
+            b"online",
+        )
+        .unwrap();
+
+        let clothing = analyze_clothing_mod(&root);
+
+        assert!(!clothing.detected);
+        assert_eq!(clothing.kind, "none");
+        assert_eq!(clothing.online_support, "not_applicable");
+        assert!(clothing.has_regulation);
+        assert!(!clothing.requires_appearance_reset);
+        assert!(safe_initial_mod_enabled(&clothing));
+        assert!(clothing.warnings[0].contains("大型玩法整合包"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn risky_clothing_destination_stays_disabled_when_names_collide() {
         let root = std::env::temp_dir().join(format!(
             "nightreign_clothing_destination_test_{}",
@@ -5528,6 +5579,22 @@ mod tests {
         assert_eq!(expanded.online_support, "complete");
         assert!(expanded.has_regulation);
         assert!(expanded.has_manual_online_setup);
+    }
+
+    #[test]
+    #[ignore = "requires NIGHTREIGN_MMV_TEST_DIR to point to a downloaded MMV pack"]
+    fn verifies_real_mmv_is_not_classified_as_clothing_mod() {
+        let mod_dir = std::env::var("NIGHTREIGN_MMV_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_MMV_TEST_DIR");
+
+        let clothing = analyze_clothing_mod(&mod_dir);
+
+        assert!(!clothing.detected);
+        assert_eq!(clothing.kind, "none");
+        assert!(clothing.has_regulation);
+        assert!(!clothing.requires_appearance_reset);
+        assert!(clothing.warnings[0].contains("4 个服装格式资源"));
     }
 
     #[test]
