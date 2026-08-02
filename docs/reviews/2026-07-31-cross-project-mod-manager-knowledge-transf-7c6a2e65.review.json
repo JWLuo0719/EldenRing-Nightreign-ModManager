@@ -111,9 +111,21 @@
                                            "Copied rollback backup before updating the disabled local compatibility package."
                                        ],
                           "note":  "The review workflow was applied to this local text-layer update; no third-party asset was repackaged for distribution."
+                      },
+                      {
+                          "id":  "reuse-46ceadd5ddc1",
+                          "appliedAt":  "2026-08-02",
+                          "context":  "Nightreign Mod Manager v0.2.0 发布与 CrossProjectVideoStudio 视频交接",
+                          "outcome":  "validated",
+                          "evidence":  [
+                                           "发布开始前用具体的 Tauri、Windows installer、URL shortcut、video handoff 查询 ReviewHub 并筛选相关复盘卡",
+                                           "将发布证据拆成安装器落位、版本与哈希、远端资产，以及视频 verified/prohibited 声明四组检查",
+                                           "新视频活动固定到发布提交 ea5a9e2 的 7 份来源证据，并通过 Test-VideoStudio.ps1"
+                                       ],
+                          "note":  "本次验证了任务前知识检索对发布范围、证据边界和跨项目交接都有实际约束作用；没有把本地 Mod 或未完成的双人实战写进发布承诺。"
                       }
                   ],
-    "reuseCount":  3,
+    "reuseCount":  4,
     "outcomeAfterReuse":  "validated",
     "lastValidatedAt":  "2026-08-02"
 }

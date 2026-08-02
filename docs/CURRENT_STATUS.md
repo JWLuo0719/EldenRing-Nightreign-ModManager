@@ -53,6 +53,13 @@
   路线中验证地图/敌人、武器、中文、登录和好友邀请；Skin Overhaul + 派生中文层已在
   Skin-only + Seamless 中验证模型与中文名称。两组玩法数据不能直接同时启用，第二位玩家
   实际加入同房也尚未验收。
+- 发布提交为 `ea5a9e2`，标签为 `v0.2.0`，GitHub Release：
+  `https://github.com/JWLuo0719/EldenRing-Nightreign-ModManager/releases/tag/v0.2.0`。
+- 视频交接已写入
+  `D:\Project\Video\CrossProjectVideoStudio\campaigns\nightreign-mod-manager-v0-2-release\`；
+  活动状态为 `script-ready`，包含三条横版稿、三条竖版短稿、声明台账、镜头表与录制交接。
+- 本轮发布与视频交接的结构化复盘保存在
+  `docs/reviews/2026-08-02-nightreign-mod-manager-v0-2-0-2e6fd594.review.json`。
 
 ### 2026-08-02 更多服装未加载定位与阶段修复
 

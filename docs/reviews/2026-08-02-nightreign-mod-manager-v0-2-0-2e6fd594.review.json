@@ -1,0 +1,71 @@
+{
+    "schemaVersion":  2,
+    "id":  "elden-ring-nightreign-mod-manager-20260802-nightreign-mod-manager-v0-2-0-2e6fd594",
+    "projectId":  "elden-ring-nightreign-mod-manager",
+    "project":  "Elden Ring Nightreign Mod Manager",
+    "date":  "2026-08-02",
+    "type":  "delivery",
+    "title":  "Nightreign Mod Manager v0.2.0 发布与视频交接形成同一证据链",
+    "summary":  "第二版发布把安装包、独立安装验证、发布资产、Git 标签和视频声明台账绑定到同一提交，既完成可下载交付，也避免视频把未完成的双人联机或 regulation 合并说成已验收。",
+    "problem":  "如何在工作树仍有无关改动、Windows 安装器存在中文资源限制、真实 Mod 验收边界复杂的情况下，完成 v0.2.0 发布，并把可核对的产品事实交接给跨项目视频仓库。",
+    "symptoms":  [
+
+                 ],
+    "rootCause":  "发布失败风险来自三个边界未被同一流程约束：WiX 默认英文代码页无法容纳中文安装文件名；构建成功不能证明安装后资源落位；视频脚本若不读取来源快照和声明台账，容易把邀请成功、两条分离的 Mod 路线或汉化页脚扩大成双人实战和玩法数据合并。",
+    "solution":  [
+                     "将版本号、变更日志、Tauri 资源映射和两种安装器作为一个发布变更提交，安装目录中的中文网址快捷方式由 bundle resource 管理。",
+                     "将 WiX 语言设为 zh-CN，分别对 MSI 做管理提取、对 NSIS 做隔离静默安装，核对 exe 版本、中文文件名、快捷方式内容和 SHA-256。",
+                     "用显式文件列表暂存发布提交，保留用户的无关修改和旧版发布文件删除状态。",
+                     "创建独立 v0.2.0 视频活动，同步发布提交的 7 份证据，维护 verified 与 prohibited 声明边界。",
+                     "把总览、MMV + Weapons + 602、Skin Overhaul 中文适配拆成三条横版稿和三条竖版短稿，避免把互斥的 regulation.bin 路线讲成已合并。"
+                 ],
+    "verification":  [
+                         "npm run lint、npm run build、cargo fmt --all -- --check、cargo clippy --all-targets --all-features -- -D warnings、cargo check 全部通过；cargo test 为 44 passed、8 ignored、0 failed。",
+                         "NSIS 隔离安装后的程序版本为 0.2.0；NSIS 与 MSI 提取目录均存在【双击】--更多游戏内容.url，内容哈希与发布源一致。",
+                         "提交 ea5a9e2 和标签 v0.2.0 已推送；GitHub Release 两种安装器与 SHA256SUMS.txt 的远端摘要通过核对。",
+                         "CrossProjectVideoStudio 的 Test-VideoStudio.ps1 返回 status ok、3 个来源项目、4 个活动、9 个模板。",
+                         "视频活动状态为 script-ready，CLAIMS.md 明确禁止声称双人同房实战已验收，也禁止声称 MMV 与 Skin Overhaul 的 regulation.bin 已合并。"
+                     ],
+    "mistakes":  [
+                     "首次 MSI 构建因 en-US 代码页无法写入中文资源名失败；改用 zh-CN 后解决。",
+                     "GitHub 会清洗纯中文独立附件名；远端改用稳定 ASCII 文件名并保留中文标签，而安装器内继续使用玩家可读中文名。"
+                 ],
+    "tags":  [
+                 "Nightreign",
+                 "Tauri v2",
+                 "Windows installer",
+                 "release",
+                 "WiX",
+                 "NSIS",
+                 "video handoff",
+                 "evidence chain",
+                 "Mod manager"
+             ],
+    "reusability":  "high",
+    "articleScore":  92,
+    "privacy":  "redact",
+    "status":  "inbox",
+    "reuseCount":  0,
+    "appliedIn":  [
+
+                  ],
+    "supersedes":  [
+
+                   ],
+    "contradicts":  [
+
+                    ],
+    "articleAngle":  "一次桌面应用第二版发布，为什么要把安装验证、GitHub 资产和视频口播放进同一条证据链",
+    "source":  {
+                   "threadId":  "",
+                   "commit":  "ea5a9e2055ff395b004562327832ff287d923734",
+                   "files":  [
+                                 "CHANGELOG.md",
+                                 "release/v0.2.0/RELEASE_NOTES.md",
+                                 "release/v0.2.0/SHA256SUMS.txt",
+                                 "app/src-tauri/tauri.conf.json",
+                                 "D:/Project/Video/CrossProjectVideoStudio/campaigns/nightreign-mod-manager-v0-2-release/CLAIMS.md",
+                                 "D:/Project/Video/CrossProjectVideoStudio/campaigns/nightreign-mod-manager-v0-2-release/HANDOFF.md"
+                             ]
+               }
+}
