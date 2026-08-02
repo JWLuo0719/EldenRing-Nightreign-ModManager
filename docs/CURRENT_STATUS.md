@@ -2,7 +2,7 @@
 
 更新时间：2026-08-02
 当前分支：`master`
-当前基线提交：`2680136 feat: compare multiplayer mod manifests`
+当前发布基线：`v0.2.0`（第二版，2026-08-02）
 
 本文件记录当前实现的短期交接状态。长期规则和已验证启动链路以仓库根目录 `AGENTS.md` 为准；视频研究与更新脚本以 `docs/VIDEO_UPDATE_PLAN.md` 为准。
 
@@ -34,6 +34,25 @@
 用户的无关变更，除非用户明确决定如何处理。
 
 ## 本轮已完成
+
+### 2026-08-02 v0.2.0 第二版发布
+
+- 前端、Tauri 和 Rust 版本统一升级为 `0.2.0`，正式发布目录为 `release/v0.2.0/`。
+- 生成并验证 NSIS `nightreign-mod-manager_0.2.0_x64-setup.exe` 与简体中文 MSI
+  `nightreign-mod-manager_0.2.0_x64_zh-CN.msi`；发布目录包含说明和 SHA-256 清单。
+- `【双击】--更多游戏内容.url` 随两个安装包写入程序目录，并作为独立发布附件提供，
+  内容为 `https://link3.cc/voyagekit`。NSIS 隔离安装与 MSI 管理提取均已回读文件名、内容和
+  产品版本；NSIS 测试安装随后通过自带卸载程序清理。
+- 发布前验证通过：`npm run lint`、`npm run build`、`cargo fmt --all -- --check`、
+  `cargo clippy --all-targets --all-features -- -D warnings`、`cargo check`、`cargo test`；
+  Rust 测试结果为 44 passed、8 ignored、0 failed。
+- 第二版的玩家侧重点是无终端启动、可执行的启动前检查、玩家化中文术语、运行环境隔离、
+  外部启动配置语义保真、玩法数据冲突门禁、存档备份、服装与 `_l` 结构检查，以及完整脱敏
+  联机一致性清单。“应用联机补丁”入口继续隐藏。
+- 两组视频可见成果必须分开表述：MMV + MoreWeapons + 602 已在 Spacewar + Seamless 社区
+  路线中验证地图/敌人、武器、中文、登录和好友邀请；Skin Overhaul + 派生中文层已在
+  Skin-only + Seamless 中验证模型与中文名称。两组玩法数据不能直接同时启用，第二位玩家
+  实际加入同房也尚未验收。
 
 ### 2026-08-02 更多服装未加载定位与阶段修复
 

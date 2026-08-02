@@ -6,17 +6,17 @@
 
 ## 下载
 
-第一版发布包见 GitHub Releases：
+第二版发布包见 GitHub Releases：
 
-- <https://github.com/JWLuo0719/EldenRing-Nightreign-ModManager/releases/tag/v0.1.0>
+- <https://github.com/JWLuo0719/EldenRing-Nightreign-ModManager/releases/tag/v0.2.0>
 
 推荐下载：
 
-- `nightreign-mod-manager_0.1.0_x64-setup.exe`
+- `nightreign-mod-manager_0.2.0_x64-setup.exe`
 
 也可以使用 MSI：
 
-- `nightreign-mod-manager_0.1.0_x64_en-US.msi`
+- `nightreign-mod-manager_0.2.0_x64_zh-CN.msi`
 
 ## 主要功能
 
@@ -65,7 +65,7 @@
 - 启动前请确认没有残留的 `nightreign.exe` 或 `me3-launcher.exe` 进程。
 - 联机补丁不会被自动查找或自动覆盖；只有用户手动选择补丁 `Game` 文件夹并确认后，才会复制补丁文件。
 - 某些 Mod 自带 `.me3` 可能引用不存在的文件。管理器会跳过不存在的 package/native，但如果游戏仍卡住，应优先排查 Mod 与当前游戏版本、深夜解锁或联机环境的兼容性。
-- 当前版本仍是第一版，建议每次更换 Mod 组合后先查看诊断页输出。
+- 第二版建议每次更换 Mod 组合后先运行“启动前检查”；需要排错时再展开高级技术详情和诊断日志。
 - 联机清单会读取 package 全部文件内容；大型整合首次生成可能需要 1–2 分钟。清单不包含绝对路径、账号目录或存档内容。
 
 ## 本地开发
