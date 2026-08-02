@@ -277,9 +277,17 @@ D:\Game\ELDEN RING NIGHTREIGN\mods\SkinOverhaul
 SHA-256 `103CF4A60E44F9754529ABE494F77C2043FA3301C54DC85F94064994ACD1A836`）同时覆盖
 完整 `item_dlc01` 和 `menu_dlc01`；它与 602 哈希不同。对当前 Skin 的 76 个新增
 `GoodsName`，该候选仅有 50 个 ID，真正中文化 8 个，另有 42 个英文和 26 个缺失。
-它只能作为 ID/名称研究样本，不能作为可用中文补丁安装。兼容路线应以 602 的
-`item_dlc01` 为底合入全部 76 个服装名，保留 602 的 `menu_dlc01`，避免覆盖已验收的
-MMV/Weapons 中文层。
+它只能作为 ID/名称研究样本，不能作为可用中文补丁安装。
+
+2026-08-02 已按该兼容路线生成本地派生包，默认停用安装在
+`Game\mods\SkinOverhaul-602-服装中文兼容补丁.disabled`：以 602 的 `item_dlc01` 为底
+合入全部 76 个服装名，并保留 602 原始 `menu_dlc01`，避免覆盖已验收的 MMV/Weapons
+中文层。派生 `item_dlc01` 为 177,920 字节，SHA-256
+`E19B438301CCECBB91C6EB2A02F66FDE6518285A08B1DB03F17A8D850127112A`；WitchyBND
+回读验证 76 / 76 个 ID 均成功。映射与构建脚本位于
+`tools/skin-overhaul-602-zhocn-names.json` 和
+`tools/build-skin-overhaul-602-zhocn-item.ps1`。测试时只启用这一个完整中文层，原始
+602/559 必须停用；在实际进游戏前不得声称 `?GoodsName?` 或联机一致性已验收。
 
 本机当前两份停用汉化均来自 2026-05-29：一份把两个文件直接放在 package 根，
 另一份缺少标准 `msg\zhocn` 层。它们早于 602 的 2026-07-22 当前主文件，不能

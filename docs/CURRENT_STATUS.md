@@ -72,9 +72,19 @@ SHA-256 `103CF4A60E44F9754529ABE494F77C2043FA3301C54DC85F94064994ACD1A836`；包
 含完整 `zhocn/item_dlc01.msgbnd.dcx` 与 `menu_dlc01.msgbnd.dcx`，不是可直接叠加的
 “服装名称小补丁”。WitchyBND 条目级比对显示，Skin 当前英文包相对 602 新增 76 个
 `GoodsName`：该候选只有 50 个对应 ID，其中仅 8 个已写成中文、42 个仍是英文、
-26 个完全缺失。因此不得安装它替换 602，也不能宣称已经找到可用的 Skin 简中补丁。
-正确下一步是以当前 602 的 `item_dlc01` 为底，只合入这 76 个服装名称并重新打包；
-`menu_dlc01` 继续原样使用 602。自制翻译和上游翻译文本必须区分来源与授权。
+26 个完全缺失。因此不得安装它替换 602，也不能把它当作可用的 Skin 简中补丁。
+
+已按正确路线生成本地派生包，并默认停用安装到
+`D:\Game\ELDEN RING NIGHTREIGN\Game\mods\SkinOverhaul-602-服装中文兼容补丁.disabled`：
+以 602 的 `item_dlc01` 为底，仅合入 76 个 Skin Overhaul `GoodsName`；产物为
+177,920 字节、SHA-256 `E19B438301CCECBB91C6EB2A02F66FDE6518285A08B1DB03F17A8D850127112A`，
+重新解包回读 76 / 76 个 ID 均与映射一致。`menu_dlc01` 保持 602 原文件（SHA-256
+`F6EEA4A210CBC6E3314998FA9001C487CEAD87081530152011B7B3BC060201D7`），因此不会用
+ERN VINS 的整包文本替换已验收的 MMV/Weapons 中文层。映射和可复现构建脚本分别为
+`tools/skin-overhaul-602-zhocn-names.json` 与
+`tools/build-skin-overhaul-602-zhocn-item.ps1`；原始 602 和 Skin 文件没有改动。
+启用测试时只能启用此派生中文层，原始 602/559 和其它完整中文层保持停用。尚未进行
+本轮进游戏验证，不能提前宣称 `?GoodsName?` 已消失或联机中文层已验收。
 
 MMV + Skin 仍需要通过可审计的参数级合并生成适配当前 MMV 2.1.7.1 的唯一
 `regulation.bin`，不得用加载顺序或简单覆盖冒充合并。
