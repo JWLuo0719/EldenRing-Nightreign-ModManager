@@ -78,13 +78,17 @@ SHA-256 `103CF4A60E44F9754529ABE494F77C2043FA3301C54DC85F94064994ACD1A836`；包
 `D:\Game\ELDEN RING NIGHTREIGN\Game\mods\SkinOverhaul-602-服装中文兼容补丁.disabled`：
 以 602 的 `item_dlc01` 为底，仅合入 76 个 Skin Overhaul `GoodsName`；产物为
 177,920 字节、SHA-256 `E19B438301CCECBB91C6EB2A02F66FDE6518285A08B1DB03F17A8D850127112A`，
-重新解包回读 76 / 76 个 ID 均与映射一致。`menu_dlc01` 保持 602 原文件（SHA-256
-`F6EEA4A210CBC6E3314998FA9001C487CEAD87081530152011B7B3BC060201D7`），因此不会用
-ERN VINS 的整包文本替换已验收的 MMV/Weapons 中文层。映射和可复现构建脚本分别为
-`tools/skin-overhaul-602-zhocn-names.json` 与
-`tools/build-skin-overhaul-602-zhocn-item.ps1`；原始 602 和 Skin 文件没有改动。
-启用测试时只能启用此派生中文层，原始 602/559 和其它完整中文层保持停用。尚未进行
-本轮进游戏验证，不能提前宣称 `?GoodsName?` 已消失或联机中文层已验收。
+重新解包回读 76 / 76 个 ID 均与映射一致。用户已在 Skin-only + Seamless 实际游戏中确认
+抽查的新增服装名称（含 2B、双月骑士蕾菈娜、米勒的鲁卡提耶、防火女、梅琳娜）正常显示，
+不再是 `?GoodsName?`。2026-08-02 随后在 `CL_MenuText` 401001、401002 的原有破晓团队
+页脚下追加 `B站 学游分享：基于破晓团队汉化补丁制作的 Skin Overhaul 服装中文兼容补丁`；
+新 `menu_dlc01` 为 147,984 字节、SHA-256
+`D19A2CEE02E0F1E11FED271FC21D093FE4949FE4470AC5DE3C2A5065DE5DF4C4`，独立解包回读两个
+条目均成功。映射、页脚配置和可复现构建脚本分别为
+`tools/skin-overhaul-602-zhocn-names.json`、`tools/skin-overhaul-602-zhocn-footer.json` 与
+`tools/build-skin-overhaul-602-zhocn-item.ps1`；原始 602 和 Skin 文件没有改动。启用测试时
+只能启用此派生中文层，原始 602/559 和其它完整中文层保持停用。页脚尚待下一次实际进游戏
+截图确认，且本地名称显示不能替代联机中文层验收。
 
 MMV + Skin 仍需要通过可审计的参数级合并生成适配当前 MMV 2.1.7.1 的唯一
 `regulation.bin`，不得用加载顺序或简单覆盖冒充合并。

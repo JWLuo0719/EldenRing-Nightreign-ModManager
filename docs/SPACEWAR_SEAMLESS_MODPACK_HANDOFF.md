@@ -281,13 +281,17 @@ SHA-256 `103CF4A60E44F9754529ABE494F77C2043FA3301C54DC85F94064994ACD1A836`）同
 
 2026-08-02 已按该兼容路线生成本地派生包，默认停用安装在
 `Game\mods\SkinOverhaul-602-服装中文兼容补丁.disabled`：以 602 的 `item_dlc01` 为底
-合入全部 76 个服装名，并保留 602 原始 `menu_dlc01`，避免覆盖已验收的 MMV/Weapons
-中文层。派生 `item_dlc01` 为 177,920 字节，SHA-256
+合入全部 76 个服装名。派生 `item_dlc01` 为 177,920 字节，SHA-256
 `E19B438301CCECBB91C6EB2A02F66FDE6518285A08B1DB03F17A8D850127112A`；WitchyBND
-回读验证 76 / 76 个 ID 均成功。映射与构建脚本位于
-`tools/skin-overhaul-602-zhocn-names.json` 和
+回读验证 76 / 76 个 ID 均成功，且用户实际游戏截图确认抽查的新服装名称已显示为中文。
+随后仅在 `CL_MenuText` 的 401001、401002 两个标题页脚条目下追加
+`B站 学游分享：基于破晓团队汉化补丁制作的 Skin Overhaul 服装中文兼容补丁`；没有覆盖
+其它 MMV/Weapons 文本。派生 `menu_dlc01` 为 147,984 字节，SHA-256
+`D19A2CEE02E0F1E11FED271FC21D093FE4949FE4470AC5DE3C2A5065DE5DF4C4`，独立解包回读
+两个条目均成功；页脚仍待下一次实际游戏截图确认。映射、页脚配置与构建脚本位于
+`tools/skin-overhaul-602-zhocn-names.json`、`tools/skin-overhaul-602-zhocn-footer.json` 和
 `tools/build-skin-overhaul-602-zhocn-item.ps1`。测试时只启用这一个完整中文层，原始
-602/559 必须停用；在实际进游戏前不得声称 `?GoodsName?` 或联机一致性已验收。
+602/559 必须停用；本地名称显示不能代替联机一致性验收。
 
 本机当前两份停用汉化均来自 2026-05-29：一份把两个文件直接放在 package 根，
 另一份缺少标准 `msg\zhocn` 层。它们早于 602 的 2026-07-22 当前主文件，不能

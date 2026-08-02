@@ -99,9 +99,21 @@
                                            "WitchyBND 条目级比对发现 76 个 Skin 自定义 GoodsName 中仅 8 个在候选包内真正中文化"
                                        ],
                           "note":  "复用作者页面、真实样本、条目级证据三层验证；结果推翻了仅凭 Mandarin 标签即可兼容 SkinOverhaul 的假设。"
+                      },
+                      {
+                          "id":  "reuse-fd2aea8469e6",
+                          "appliedAt":  "2026-08-02",
+                          "context":  "EldenRing-Nightreign-ModManager SkinOverhaul 602 footer compatibility patch",
+                          "outcome":  "validated",
+                          "evidence":  [
+                                           "Rebuilt only the derived msg\\\\zhocn item/menu files from read-only staging.",
+                                           "Verified SHA-256 values and independently unpacked menu entries 401001 and 401002 before installation.",
+                                           "Copied rollback backup before updating the disabled local compatibility package."
+                                       ],
+                          "note":  "The review workflow was applied to this local text-layer update; no third-party asset was repackaged for distribution."
                       }
                   ],
-    "reuseCount":  2,
+    "reuseCount":  3,
     "outcomeAfterReuse":  "validated",
     "lastValidatedAt":  "2026-08-02"
 }
