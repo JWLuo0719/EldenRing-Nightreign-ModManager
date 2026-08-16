@@ -100,6 +100,8 @@ pub struct AppConfig {
     pub launch_exe_path: String,
     #[serde(default)]
     pub runtime_environment: RuntimeEnvironment,
+    #[serde(default)]
+    pub community_compatibility_mode: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,6 +138,7 @@ pub struct SpecialModStatus {
     pub onlinefix_installed: bool,
     pub server_redirector_conflicts: Vec<String>,
     pub nighter_available: bool,
+    pub nighter_loaded: bool,
     pub nighter_path: String,
     pub nighter_config_path: String,
     pub missing_game_files: Vec<String>,
@@ -436,6 +439,7 @@ fn load_config() -> AppConfig {
             me3_path: String::new(),
             launch_exe_path: String::new(),
             runtime_environment: RuntimeEnvironment::Auto,
+            community_compatibility_mode: false,
         })
     } else {
         AppConfig {
@@ -443,6 +447,7 @@ fn load_config() -> AppConfig {
             me3_path: String::new(),
             launch_exe_path: String::new(),
             runtime_environment: RuntimeEnvironment::Auto,
+            community_compatibility_mode: false,
         }
     }
 }
@@ -517,6 +522,43 @@ pub fn set_runtime_environment(environment: RuntimeEnvironment) -> Result<(), St
     let mut config = load_config();
     config.runtime_environment = environment;
     save_config(&config)
+}
+
+#[command]
+pub fn get_community_compatibility_mode() -> bool {
+    let config = load_config();
+    community_compatibility_mode_enabled(&config)
+}
+
+fn community_compatibility_mode_enabled(config: &AppConfig) -> bool {
+    config.community_compatibility_mode
+        || load_external_mods_config()
+            .packages
+            .iter()
+            .any(|entry| entry.profile_mode == ExternalProfileMode::MmvSeamlessCommunity)
+}
+
+#[command]
+pub fn set_community_compatibility_mode(enabled: bool) -> Result<(), String> {
+    let mut config = load_config();
+    config.community_compatibility_mode = enabled;
+    save_config(&config)?;
+
+    // Per-Mod profile modes were used before the dedicated global setting existed.
+    // Clear them after either explicit choice so the single setting remains authoritative.
+    let mut external_mods = load_external_mods_config();
+    let had_legacy_modes = external_mods
+        .packages
+        .iter()
+        .any(|entry| entry.profile_mode != ExternalProfileMode::Author);
+    if had_legacy_modes {
+        for entry in &mut external_mods.packages {
+            entry.profile_mode = ExternalProfileMode::Author;
+        }
+        save_external_mods_config(&external_mods)?;
+    }
+
+    Ok(())
 }
 
 #[command]
@@ -595,7 +637,9 @@ fn collect_mods() -> Result<Vec<ModInfo>, String> {
         }
     }
 
-    mods.extend(collect_external_mods());
+    mods.extend(collect_external_mods(community_compatibility_mode_enabled(
+        &config,
+    )));
     mods.sort_by_key(|item| item.name.to_lowercase());
     Ok(mods)
 }
@@ -690,7 +734,7 @@ fn parse_native_file(path: &Path, source: &str) -> Option<ModInfo> {
     })
 }
 
-fn collect_external_mods() -> Vec<ModInfo> {
+fn collect_external_mods(community_compatibility_mode: bool) -> Vec<ModInfo> {
     let config = load_external_mods_config();
     let mut mods = Vec::new();
 
@@ -701,8 +745,12 @@ fn collect_external_mods() -> Vec<ModInfo> {
         mod_info.id = external_id("package", &path);
         mod_info.source = "external_package".to_string();
         mod_info.enabled = entry.enabled;
-        mod_info.profile_mode = entry.profile_mode;
-        if entry.profile_mode == ExternalProfileMode::MmvSeamlessCommunity {
+        mod_info.profile_mode = effective_external_profile_mode(
+            community_compatibility_mode,
+            entry.profile_mode,
+            &mod_info,
+        );
+        if mod_info.profile_mode == ExternalProfileMode::MmvSeamlessCommunity {
             mod_info.network_backend = NetworkBackend::Seamless.as_str().to_string();
             mod_info.description =
                 "社区 Seamless 兼容模式：只在生成副本中用 nrsc.dll 替代作者 Server Redirector"
@@ -722,6 +770,24 @@ fn collect_external_mods() -> Vec<ModInfo> {
     }
 
     mods
+}
+
+fn effective_external_profile_mode(
+    community_compatibility_mode: bool,
+    stored_mode: ExternalProfileMode,
+    mod_info: &ModInfo,
+) -> ExternalProfileMode {
+    let is_mmv_community_candidate = mod_info.source == "external_package"
+        && mod_info.author_profile
+        && mod_info.network_backend == NetworkBackend::ServerRedirector.as_str();
+
+    if stored_mode == ExternalProfileMode::MmvSeamlessCommunity
+        || (community_compatibility_mode && is_mmv_community_candidate)
+    {
+        ExternalProfileMode::MmvSeamlessCommunity
+    } else {
+        ExternalProfileMode::Author
+    }
 }
 
 fn external_package_fallback(path: &Path, enabled: bool) -> ModInfo {
@@ -789,7 +855,7 @@ fn external_id(kind: &str, path: &Path) -> String {
 }
 
 fn find_top_level_me3_files(path: &Path) -> Vec<PathBuf> {
-    fs::read_dir(path)
+    let mut profiles = fs::read_dir(path)
         .ok()
         .into_iter()
         .flatten()
@@ -802,7 +868,9 @@ fn find_top_level_me3_files(path: &Path) -> Vec<PathBuf> {
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("me3"));
             is_me3.then_some(path)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    profiles.sort();
+    profiles
 }
 
 fn parse_me3_content(content: &str) -> (String, String, String) {
@@ -1132,26 +1200,6 @@ pub fn toggle_external_mod(mod_id: String, enabled: bool) -> Result<(), String> 
         return Err("未找到外部 Mod 注册项".to_string());
     }
 
-    save_external_mods_config(&config)
-}
-
-#[command]
-pub fn set_external_mod_profile_mode(
-    mod_id: String,
-    profile_mode: ExternalProfileMode,
-) -> Result<(), String> {
-    let mut config = load_external_mods_config();
-    let entry = config
-        .packages
-        .iter_mut()
-        .find(|entry| external_id("package", Path::new(&entry.path)) == mod_id)
-        .ok_or_else(|| "未找到外部 Mod 注册项".to_string())?;
-
-    if profile_mode == ExternalProfileMode::MmvSeamlessCommunity {
-        validate_mmv_seamless_candidate(Path::new(&entry.path))?;
-    }
-
-    entry.profile_mode = profile_mode;
     save_external_mods_config(&config)
 }
 
@@ -1833,7 +1881,11 @@ pub fn get_special_mod_status() -> Result<SpecialModStatus, String> {
     }
 
     let game_dir = Path::new(&config.game_path);
-    Ok(build_special_mod_status(game_dir))
+    let profile_plan = build_generated_profile_plan().ok();
+    Ok(build_special_mod_status(
+        game_dir,
+        profile_plan.as_ref().map(|plan| plan.natives.as_slice()),
+    ))
 }
 
 #[command]
@@ -2120,14 +2172,20 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                     .start_online
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "未声明".to_string());
+                let sources = plan
+                    .author_profile_sources
+                    .iter()
+                    .filter_map(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().to_string())
+                    .collect::<Vec<_>>();
                 add_preflight_check(
                     &mut checks,
                     "author_profile",
                     "作者启动配置",
                     "pass",
                     format!(
-                        "已保留 {} 份作者配置；savefile={savefile}，start_online={start_online}",
-                        plan.author_profile_sources.len()
+                        "已采用作者启动配置：{}；savefile={savefile}，start_online={start_online}",
+                        sources.join("、")
                     ),
                 );
             }
@@ -2252,7 +2310,13 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
     }
 
     if game_valid {
-        let status = build_special_mod_status(game_dir);
+        let status = build_special_mod_status(
+            game_dir,
+            profile_plan
+                .as_ref()
+                .ok()
+                .map(|plan| plan.natives.as_slice()),
+        );
         let redirector_environment_conflict =
             using_server_redirector && !status.server_redirector_conflicts.is_empty();
         let seamless_required = matches!(
@@ -2341,7 +2405,7 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
             &mut checks,
             "nighter",
             "深夜解锁",
-            if using_server_redirector || status.nighter_available {
+            if using_server_redirector || status.nighter_loaded {
                 "pass"
             } else {
                 "warning"
@@ -2353,7 +2417,14 @@ fn build_launch_preflight() -> Result<LaunchPreflight, String> {
                     "当前 MMV 方案不加载 nighter.dll。".to_string()
                 }
             } else if status.nighter_available {
-                format!("已检测到 {}", status.nighter_path)
+                if status.nighter_loaded {
+                    format!("已检测到并会在本次启动中加载 {}", status.nighter_path)
+                } else {
+                    format!(
+                        "已检测到 {}，但它没有进入本次启动配置；请确认对应 Mod 已启用。",
+                        status.nighter_path
+                    )
+                }
             } else {
                 "未检测到 nighter.dll；不使用深夜解锁时可忽略。".to_string()
             },
@@ -2505,7 +2576,11 @@ pub fn install_seamless_onlinefix(patch_game_path: String) -> Result<SpecialModS
             )),
         };
     }
-    Ok(build_special_mod_status(game_dir))
+    let profile_plan = build_generated_profile_plan().ok();
+    Ok(build_special_mod_status(
+        game_dir,
+        profile_plan.as_ref().map(|plan| plan.natives.as_slice()),
+    ))
 }
 
 #[command]
@@ -2519,7 +2594,11 @@ pub fn restore_latest_online_patch_backup() -> Result<SpecialModStatus, String> 
     let backup_dir =
         latest_patch_backup_dir().ok_or_else(|| "没有可恢复的联机补丁备份".to_string())?;
     restore_patch_backup(&backup_dir, game_dir)?;
-    Ok(build_special_mod_status(game_dir))
+    let profile_plan = build_generated_profile_plan().ok();
+    Ok(build_special_mod_status(
+        game_dir,
+        profile_plan.as_ref().map(|plan| plan.natives.as_slice()),
+    ))
 }
 
 #[command]
@@ -2938,7 +3017,7 @@ fn validate_runtime_launch_environment(
     game_dir: &Path,
 ) -> Result<(), String> {
     let environment = effective_runtime_environment(config);
-    let status = build_special_mod_status(game_dir);
+    let status = build_special_mod_status(game_dir, Some(plan.natives.as_slice()));
     let steam_running = read_tasklist_processes()
         .iter()
         .any(|process| process.name.eq_ignore_ascii_case("steam.exe"));
@@ -3384,9 +3463,27 @@ fn infer_sibling_mods_dir(game_dir: &Path) -> PathBuf {
     infer_install_root(game_dir).join("mods")
 }
 
-fn build_special_mod_status(game_dir: &Path) -> SpecialModStatus {
-    let nighter_path = game_dir.join("mods").join("nighter.dll");
-    let nighter_config_path = game_dir.join("mods").join("nighter.json");
+fn build_special_mod_status(
+    game_dir: &Path,
+    planned_natives: Option<&[NativeEntry]>,
+) -> SpecialModStatus {
+    let planned_nighter = planned_natives.and_then(|natives| {
+        natives.iter().find_map(|entry| {
+            entry
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("nighter.dll"))
+                .then(|| entry.path.clone())
+        })
+    });
+    let installed_nighter = planned_nighter
+        .clone()
+        .or_else(|| find_installed_nighter(game_dir));
+    let nighter_path = installed_nighter
+        .clone()
+        .unwrap_or_else(|| game_dir.join("mods").join("nighter.dll"));
+    let nighter_config_path = nighter_path.with_extension("json");
 
     let missing_game_files = patch_required_files()
         .iter()
@@ -3401,13 +3498,31 @@ fn build_special_mod_status(game_dir: &Path) -> SpecialModStatus {
             .iter()
             .all(|relative_path| game_dir.join(relative_path).exists()),
         server_redirector_conflicts: server_redirector_conflict_files(game_dir),
-        nighter_available: nighter_path.exists(),
+        nighter_available: installed_nighter.is_some(),
+        nighter_loaded: planned_nighter.is_some(),
         nighter_path: nighter_path.to_string_lossy().to_string(),
         nighter_config_path: nighter_config_path.to_string_lossy().to_string(),
         missing_game_files,
         latest_patch_backup: latest_patch_backup_dir()
             .map_or_else(String::new, |path| path.to_string_lossy().to_string()),
     }
+}
+
+fn find_installed_nighter(game_dir: &Path) -> Option<PathBuf> {
+    let mods_dir = game_dir.join("mods");
+    [
+        game_dir.join("SeamlessCoop").join("nighter.dll"),
+        mods_dir.join("nighter.dll"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+    .or_else(|| {
+        fs::read_dir(mods_dir)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path().join("nighter.dll"))
+            .find(|path| path.is_file())
+    })
 }
 
 fn patch_required_files() -> Vec<PathBuf> {
@@ -4475,20 +4590,15 @@ fn collect_profile_data_for_mod(
         return Ok((Vec::new(), Vec::new(), AuthorProfileMetadata::default()));
     }
 
-    let mut packages = Vec::new();
-    let mut natives = Vec::new();
-    let mut metadata = AuthorProfileMetadata::default();
-
+    let mut author_profiles = Vec::new();
     for me3_file in find_top_level_me3_files(mod_dir) {
         let content = fs::read_to_string(&me3_file).map_err(|e| e.to_string())?;
-        let (mut mod_packages, mut mod_natives, mut mod_metadata) =
-            parse_me3_document(mod_dir, &content)?;
-        mod_metadata.source_paths.push(me3_file);
-        packages.append(&mut mod_packages);
-        natives.append(&mut mod_natives);
-        merge_author_profile_metadata(&mut metadata, mod_metadata)?;
+        let (packages, natives, mut metadata) = parse_me3_document(mod_dir, &content)?;
+        metadata.source_paths.push(me3_file);
+        author_profiles.push((packages, natives, metadata));
     }
 
+    let (mut packages, mut natives, metadata) = merge_or_select_author_profiles(author_profiles)?;
     if packages.is_empty() && natives.is_empty() {
         let (mut inferred_packages, mut inferred_natives) = infer_entries_for_mod(mod_dir);
         packages.append(&mut inferred_packages);
@@ -4496,6 +4606,57 @@ fn collect_profile_data_for_mod(
     }
 
     Ok((packages, natives, metadata))
+}
+
+fn merge_or_select_author_profiles(
+    author_profiles: Vec<(Vec<PackageEntry>, Vec<NativeEntry>, AuthorProfileMetadata)>,
+) -> Result<(Vec<PackageEntry>, Vec<NativeEntry>, AuthorProfileMetadata), String> {
+    let merge_all =
+        |profiles: &[(Vec<PackageEntry>, Vec<NativeEntry>, AuthorProfileMetadata)]| {
+            let mut packages = Vec::new();
+            let mut natives = Vec::new();
+            let mut metadata = AuthorProfileMetadata::default();
+            for (profile_packages, profile_natives, profile_metadata) in profiles {
+                packages.extend(profile_packages.clone());
+                natives.extend(profile_natives.clone());
+                merge_author_profile_metadata(&mut metadata, profile_metadata.clone())?;
+            }
+            Ok::<_, String>((packages, natives, metadata))
+        };
+
+    match merge_all(&author_profiles) {
+        Ok(result) => Ok(result),
+        Err(merge_error) if author_profiles.len() > 1 => {
+            let safe_profiles = author_profiles
+                .into_iter()
+                .filter(|(packages, _, _)| collect_regulation_files(packages).len() <= 1)
+                .collect::<Vec<_>>();
+
+            match safe_profiles.as_slice() {
+                [(packages, natives, metadata)] => Ok((
+                    packages.clone(),
+                    natives.clone(),
+                    metadata.clone(),
+                )),
+                [] => Err(format!(
+                    "{merge_error} 当前 Mod 文件夹包含多份互斥作者启动配置，且每份候选方案都不满足单一玩法数据文件（regulation.bin）要求；管理器不会自动选择。请拆分为独立 Mod，或使用作者提供的已合并兼容方案。"
+                )),
+                profiles => {
+                    let names = profiles
+                        .iter()
+                        .filter_map(|(_, _, metadata)| metadata.source_paths.first())
+                        .filter_map(|path| path.file_name())
+                        .map(|name| name.to_string_lossy().to_string())
+                        .collect::<Vec<_>>();
+                    Err(format!(
+                        "{merge_error} 当前 Mod 文件夹包含多个可安全加载但互斥的作者启动配置（{}）；管理器不会按文件名随意选择。请拆分为独立 Mod 后分别启用。",
+                        names.join("、")
+                    ))
+                }
+            }
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -5541,6 +5702,89 @@ mod tests {
     }
 
     #[test]
+    fn selects_the_only_safe_profile_when_author_profiles_are_mutually_exclusive() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_author_profile_variant_test_{}",
+            current_timestamp()
+        ));
+        let sandbox = root.join("mod");
+        let progression = sandbox.join("Progression");
+        fs::create_dir_all(&progression).unwrap();
+        fs::write(sandbox.join("regulation.bin"), b"sandbox").unwrap();
+        fs::write(progression.join("regulation.bin"), b"progression").unwrap();
+        fs::write(
+            root.join("Launch Arena (Sandbox).me3"),
+            r#"
+profileVersion = "v1"
+savefile = "Sandbox.sl2"
+
+[[packages]]
+path = "mod"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("Launch Arena (Progression).me3"),
+            r#"
+profileVersion = "v1"
+savefile = "Progression.sl2"
+
+[[packages]]
+path = "mod"
+
+[[packages]]
+path = "mod/Progression"
+"#,
+        )
+        .unwrap();
+
+        let (packages, natives, metadata) = collect_profile_data_for_mod(&root).unwrap();
+
+        assert!(natives.is_empty());
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].path, sandbox);
+        assert_eq!(collect_regulation_files(&packages).len(), 1);
+        assert_eq!(
+            metadata
+                .root_fields
+                .get("savefile")
+                .and_then(toml::Value::as_str),
+            Some("Sandbox.sl2")
+        );
+        assert_eq!(
+            metadata
+                .source_paths
+                .first()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str()),
+            Some("Launch Arena (Sandbox).me3")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "requires NIGHTREIGN_TRAINING_GROUND_TEST_DIR to point to the downloaded Boss Arena folder"]
+    fn verifies_downloaded_training_ground_uses_sandbox_profile() {
+        let mod_dir = std::env::var("NIGHTREIGN_TRAINING_GROUND_TEST_DIR")
+            .map(PathBuf::from)
+            .expect("set NIGHTREIGN_TRAINING_GROUND_TEST_DIR");
+
+        let (packages, natives, metadata) = collect_profile_data_for_mod(&mod_dir).unwrap();
+
+        assert!(natives.is_empty());
+        assert_eq!(packages.len(), 1);
+        assert_eq!(collect_regulation_files(&packages).len(), 1);
+        assert_eq!(
+            metadata
+                .source_paths
+                .first()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str()),
+            Some("Launch NR Boss Arena (Sandbox).me3")
+        );
+    }
+
+    #[test]
     fn risky_clothing_destination_stays_disabled_when_names_collide() {
         let root = std::env::temp_dir().join(format!(
             "nightreign_clothing_destination_test_{}",
@@ -5982,6 +6226,7 @@ load_early = true
             me3_path: String::new(),
             launch_exe_path: String::new(),
             runtime_environment: RuntimeEnvironment::SpacewarSeamless,
+            community_compatibility_mode: false,
         };
 
         apply_mmv_seamless_community_override(
@@ -6271,6 +6516,7 @@ path = "map/Server Redirector/cl_server_redirector.dll"
             me3_path: String::new(),
             launch_exe_path: String::new(),
             runtime_environment: RuntimeEnvironment::SpacewarSeamless,
+            community_compatibility_mode: false,
         };
 
         let manifest = build_multiplayer_manifest_from_plan(&plan, &config).unwrap();
@@ -6358,6 +6604,65 @@ path = "map/Server Redirector/cl_server_redirector.dll"
             detect_network_backend(&natives).unwrap(),
             NetworkBackend::None
         );
+    }
+
+    #[test]
+    fn special_mod_status_uses_nighter_from_the_generated_plan() {
+        let root = std::env::temp_dir().join(format!(
+            "nightreign_mod_manager_nighter_status_test_{}",
+            current_timestamp()
+        ));
+        let game_dir = root.join("Game");
+        let external_nighter = game_dir
+            .join("mods")
+            .join("深夜解锁mod")
+            .join("nighter.dll");
+        fs::create_dir_all(&game_dir).unwrap();
+        fs::create_dir_all(external_nighter.parent().unwrap()).unwrap();
+        fs::write(&external_nighter, b"nighter").unwrap();
+        let natives = vec![NativeEntry {
+            path: external_nighter.clone(),
+            load_early: false,
+            fields: default_native_fields(false),
+        }];
+
+        let status = build_special_mod_status(&game_dir, Some(&natives));
+
+        assert!(status.nighter_available);
+        assert!(status.nighter_loaded);
+        assert_eq!(PathBuf::from(status.nighter_path), external_nighter);
+
+        let installed_only = build_special_mod_status(&game_dir, None);
+        assert!(installed_only.nighter_available);
+        assert!(!installed_only.nighter_loaded);
+        assert_eq!(PathBuf::from(installed_only.nighter_path), external_nighter);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn global_community_mode_applies_to_future_mmv_candidates() {
+        let mut mod_info = external_package_fallback(Path::new(r"D:\Mods\MMV"), true);
+        mod_info.author_profile = true;
+        mod_info.network_backend = NetworkBackend::ServerRedirector.as_str().to_string();
+
+        assert_eq!(
+            effective_external_profile_mode(true, ExternalProfileMode::Author, &mod_info),
+            ExternalProfileMode::MmvSeamlessCommunity
+        );
+        assert_eq!(
+            effective_external_profile_mode(false, ExternalProfileMode::Author, &mod_info),
+            ExternalProfileMode::Author
+        );
+    }
+
+    #[test]
+    fn older_app_config_defaults_community_mode_to_off() {
+        let config: AppConfig = serde_json::from_str(
+            r#"{"game_path":"Game","me3_path":"ME3","runtime_environment":"auto"}"#,
+        )
+        .unwrap();
+
+        assert!(!config.community_compatibility_mode);
     }
 
     #[test]
@@ -6484,6 +6789,7 @@ path = "map/Server Redirector/cl_server_redirector.dll"
             me3_path: String::new(),
             launch_exe_path: String::new(),
             runtime_environment: RuntimeEnvironment::Auto,
+            community_compatibility_mode: false,
         };
 
         let status = build_runtime_environment_status(&config);
@@ -6513,6 +6819,7 @@ path = "map/Server Redirector/cl_server_redirector.dll"
             me3_path: String::new(),
             launch_exe_path: String::new(),
             runtime_environment: RuntimeEnvironment::Auto,
+            community_compatibility_mode: false,
         };
 
         let status = build_runtime_environment_status(&config);
@@ -6594,6 +6901,7 @@ path = "map/Server Redirector/cl_server_redirector.dll"
             me3_path: String::new(),
             launch_exe_path: String::new(),
             runtime_environment: RuntimeEnvironment::SpacewarSeamless,
+            community_compatibility_mode: false,
         };
 
         apply_mmv_seamless_community_override(
@@ -6843,6 +7151,7 @@ path = "map/Server Redirector/cl_server_redirector.dll"
             me3_path: String::new(),
             launch_exe_path: String::new(),
             runtime_environment: RuntimeEnvironment::SpacewarSeamless,
+            community_compatibility_mode: false,
         };
         let (mut packages, mut natives, mut metadata) =
             collect_profile_data_for_mod(&mmv_dir).unwrap();

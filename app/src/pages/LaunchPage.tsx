@@ -262,14 +262,16 @@ export function LaunchPage({
               />
               <SpecialRow
                 label="深夜解锁（可选）"
-                tone={specialModStatus?.nighterAvailable ? "success" : "warning"}
+                tone={specialModStatus?.nighterLoaded ? "success" : "warning"}
                 value={
                   usingServerRedirector
                     ? specialModStatus?.nighterAvailable
                       ? "已检测到 · 本方案不注入"
                       : "本方案不加载"
-                    : specialModStatus?.nighterAvailable
-                      ? specialModStatus.nighterPath
+                    : specialModStatus?.nighterLoaded
+                      ? `${specialModStatus.nighterPath} · 本次启动会加载`
+                      : specialModStatus?.nighterAvailable
+                        ? `${specialModStatus.nighterPath} · 已检测到但未进入本次启动配置`
                       : "未检测到"
                 }
               />

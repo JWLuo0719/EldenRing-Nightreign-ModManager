@@ -233,6 +233,7 @@ load_before = []
 - DLL-only Mod 会推断为 native。
 - `.me3` 解析同时兼容 `[[packages]]` 和 `[[package]]`。
 - 外部作者 `.me3` 采用语义保真生成：保留 `savefile`、`start_online`、未知根字段及条目扩展字段，相对路径在生成副本中解析为绝对路径，原文件保持只读。
+- 同一 Mod 文件夹内有多份顶层 `.me3` 时，先按原规则合并；若作者根字段冲突，只有恰好一份候选 Profile 满足单一 `regulation.bin` 门槛时才可自动采用该份。多个安全候选或全部候选含多份玩法数据时必须阻止并要求拆分/使用作者合并包，不能按文件名静默选择。Boss Arena（训练场）当前因此只会采用 Sandbox；其 Progression Profile 同时声明两份 `regulation.bin`，继续受玩法数据硬门禁保护。
 - 联机后端按实际 native 自动判定。检测到 `cl_server_redirector.dll` 时禁止自动注入游戏根目录的 `nrsc.dll/nighter.dll`；Server Redirector 与 Seamless/nighter 同时出现必须阻止生成和启动。
 - Server Redirector 作者 Profile 必须位于实际游戏 `Game` 目录之外。MMV 的 `supports.game = "nightrein"` 只在生成副本中规范为 `nightreign`。
 - Server Redirector 遇到 OnlineFix/Spacewar 文件或未运行 Steam 时必须阻止实际启动，不能只显示 warning。现有 Spacewar 目录应原样保留，用户需要另选干净的正版 Steam `Game` 目录。
@@ -256,9 +257,16 @@ load_before = []
   管理器不得自动执行 Mod 附带的 BAT/CMD/PS1/EXE 来生成 `_l` 文件，只能报告结构与
   缺失配对。扩展服装 ZIP 安装或首次外部目录注册后默认保持停用；启停或切换配置方案前必须提示玩家先
   换回本体服装。该提示是风险门槛，不得描述为已经修复或清理了存档中的外观 ID。
-- 外部 MMV 作者 Profile 可以显式选择 `mmv_seamless_community` 社区兼容模式。它不是作者官方支持路线，只能在生成的 `active-nightreign.me3` 副本中移除 `cl_server_redirector.dll`，再使用游戏目录现有的 `SeamlessCoop\nrsc.dll`；原 `.me3`、DLL、package 和 `regulation.bin` 必须保持只读。该模式只允许明确的 Steam + Seamless 或 Spacewar + Seamless 环境，并要求恰好一个 package 根级 `regulation.bin`。
+- MMV 社区兼容方式是设置页中始终可见的全局选项，不再绑定某张已安装 Mod 卡片；用户可在安装/注册 MMV 前预先选择。启用后，符合条件的外部 MMV 作者 Profile 自动使用 `mmv_seamless_community`：只能在生成的 `active-nightreign.me3` 副本中移除 `cl_server_redirector.dll`，再使用游戏目录现有的 `SeamlessCoop\nrsc.dll`；原 `.me3`、DLL、package 和 `regulation.bin` 必须保持只读。旧 `external_mods.json` 中逐 Mod 的 `profile_mode` 只用于迁移兼容，用户通过新入口作出明确选择后由全局设置接管。该模式不是作者官方支持路线，只允许明确的 Steam + Seamless 或 Spacewar + Seamless 环境，并要求恰好一个 package 根级 `regulation.bin`。
+- 深夜解锁状态必须以当前生成启动计划中的 `nighter.dll` native 为准，同时可显示已安装但未进入本次计划的状态；不得只检查固定的 `Game\mods\nighter.dll`。启用目录、外部 DLL 和 `SeamlessCoop\nighter.dll` 都可能是有效来源。
 - MMV 社区兼容模式的启动前检查必须显示玩法 `regulation.bin` 和简中 `item/menu_dlc01.msgbnd.dcx` 的 SHA-256；完整 `msg\zhocn` 覆盖层只能启用一份。602 与 559 覆盖同一文本集合，不得同时启用。602 当前主文件上传于 2026-07-22（314 KB），Changelog 明确标注同步 2.1.7.1；页面顶部仍显示 2.1.6，因此版本判断应同时记录上传日期、Changelog 和文件哈希，不能只读顶部版本号。
 - 602 的 `menu_dlc01.msgbnd.dcx` 自带 MMV/Weapons 版本署名；标题画面页脚出现“MMV 2.1.7.1 / 武器模组兼容补丁”只证明 602 菜单文本被覆盖，不能证明 MMV package 或 `regulation.bin` 已加载。判断实际加载项必须读取生成 Profile 和本轮 ME3 日志。
+- 独立 `Skin Overhaul × 602` 中文兼容补丁在公开发布前必须取得 Skin Overhaul 权利方的
+  书面许可。602 页面允许署名后使用资产并参与 Nexus Donation Points，但 Skin Overhaul
+  要求资产使用事先许可且默认禁止相关 Mod 获取 DP，因此未获得专门 DP 授权时必须关闭
+  Donation Points；直接捐赠在许可边界确认前也建议暂不启用。发布页应关联并链接两项原作、
+  完整署名、披露 AI 翻译参与，并优先考虑只发布名称映射与本地构建脚本以缩小再分发范围。详细依据见
+  `docs/research/2026-08-09-skin-overhaul-602-nexus-publication.md`。
 - 双方联机一致性清单必须脱敏，不得包含绝对路径、Windows 用户名、账号目录或存档内容。比较范围包括 package 完整目录树 SHA-256、package/native 加载顺序、`regulation.bin`、完整简中层、native 的 `load_early`、游戏/Spacewar 关键二进制和 `nrsc_settings.ini` 指纹。`OnlineFix.ini`、`steam_emu.ini` 可能包含本机身份信息，不进入清单。
 - 大型 package 清单通过 blocking worker 读取完整内容；当前 2.74 GB MMV + Weapons 实测约需 81 秒。不得用目录修改时间或文件名代替内容哈希来宣称双方一致；未来增加缓存时，缓存键也必须能证明文件内容未变化。
 

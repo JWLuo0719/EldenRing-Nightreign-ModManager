@@ -12,7 +12,6 @@ interface ModsPageProps {
   busy: boolean;
   onToggle: (mod: ModInfo) => void;
   onDelete: (mod: ModInfo) => void;
-  onProfileMode: (mod: ModInfo) => void;
   onRelink: (mod: ModInfo) => void;
   onRefresh: () => void;
   onInstallZip: (zipPath: string) => Promise<void>;
@@ -30,7 +29,6 @@ export function ModsPage({
   busy,
   onToggle,
   onDelete,
-  onProfileMode,
   onRelink,
   onRefresh,
   onInstallZip,
@@ -233,7 +231,6 @@ export function ModsPage({
                     onToggle={onToggle}
                     onDelete={onDelete}
                     onConfigure={openConfigEditor}
-                    onProfileMode={onProfileMode}
                     onRelink={onRelink}
                   />
                 ))}

@@ -47,6 +47,7 @@ export function useModManager() {
   const [me3Path, setMe3PathState] = useState("");
   const [launchExePath, setLaunchExePathState] = useState("");
   const [specialModStatus, setSpecialModStatus] = useState<SpecialModStatus | null>(null);
+  const [communityCompatibilityMode, setCommunityCompatibilityModeState] = useState(false);
   const [runtimeEnvironmentStatus, setRuntimeEnvironmentStatus] =
     useState<RuntimeEnvironmentStatus | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -61,18 +62,27 @@ export function useModManager() {
   }, []);
 
   const loadWorkspace = useCallback(async () => {
-    const [modsData, profilesData, activeData, specialStatus, runtimeStatus] = await Promise.all([
+    const [
+      modsData,
+      profilesData,
+      activeData,
+      specialStatus,
+      runtimeStatus,
+      communityMode,
+    ] = await Promise.all([
       invoke<ModInfo[]>("scan_mods"),
       invoke<Profile[]>("get_profiles"),
       invoke<Profile | null>("get_active_profile"),
       invoke<SpecialModStatus>("get_special_mod_status"),
       invoke<RuntimeEnvironmentStatus>("get_runtime_environment_status"),
+      invoke<boolean>("get_community_compatibility_mode"),
     ]);
     setMods(modsData);
     setProfiles(profilesData);
     setActiveProfile(activeData);
     setSpecialModStatus(specialStatus);
     setRuntimeEnvironmentStatus(runtimeStatus);
+    setCommunityCompatibilityModeState(communityMode);
     return { modsData, profilesData, activeData };
   }, []);
 
@@ -275,23 +285,19 @@ export function useModManager() {
     [activeProfile, loadWorkspace, pushToast, runTask]
   );
 
-  const setExternalProfileMode = useCallback(
-    (mod: ModInfo) => {
-      const useCommunityMode = mod.profileMode !== "mmv_seamless_community";
+  const setCommunityCompatibilityMode = useCallback(
+    (useCommunityMode: boolean) => {
       setConfirmState({
         title: useCommunityMode ? "启用社区 Seamless 兼容模式" : "恢复作者联机方式",
         message: useCommunityMode
-          ? `管理器只会在生成的启动配置副本（active-nightreign.me3）中移除 Server Redirector，并改用游戏目录现有的 SeamlessCoop\\nrsc.dll。\n\n原始 Mod、作者启动配置、玩法数据文件（regulation.bin）和功能插件都不会被修改。此方式来自社区实践，不受 MMV 作者支持；启用前会强制检查运行环境、唯一玩法数据文件和中文层。`
-          : "管理器将恢复使用作者启动配置（.me3）中的 Server Redirector。原始 Mod 文件仍不会被修改；该模式只适用于干净的 Steam 正版目录。",
+          ? `这个设置会立即保存，不需要先安装 MMV。以后注册或启用带 Server Redirector 的 MMV 作者启动配置时，管理器只会在生成的启动配置副本（active-nightreign.me3）中移除 Server Redirector，并改用游戏目录现有的 SeamlessCoop\\nrsc.dll。\n\n原始 Mod、作者启动配置、玩法数据文件（regulation.bin）和功能插件都不会被修改。此方式来自社区实践，不受 MMV 作者支持；真正启动前仍会强制检查运行环境、唯一玩法数据文件和中文层。`
+          : "管理器将不再自动改写以后注册或启用的 MMV 作者启动配置，并恢复使用其中的 Server Redirector。原始 Mod 文件仍不会被修改；作者模式只适用于干净的 Steam 正版目录。",
         confirmText: useCommunityMode ? "启用兼容模式" : "恢复作者模式",
         danger: useCommunityMode,
         onConfirm: async () => {
           await runTask(async () => {
-            await invoke("set_external_mod_profile_mode", {
-              modId: mod.id,
-              profileMode: useCommunityMode
-                ? "mmv_seamless_community"
-                : "author",
+            await invoke("set_community_compatibility_mode", {
+              enabled: useCommunityMode,
             });
             await loadWorkspace();
             pushToast(
@@ -300,7 +306,7 @@ export function useModManager() {
                 ? "已启用社区 Seamless 兼容模式"
                 : "已恢复作者 Server Redirector 模式"
             );
-          }, "切换外部 Mod 启动方式失败");
+          }, "切换社区兼容模式失败");
         },
       });
     },
@@ -700,6 +706,7 @@ export function useModManager() {
     me3Path,
     launchExePath,
     specialModStatus,
+    communityCompatibilityMode,
     runtimeEnvironmentStatus,
     toasts,
     confirmState,
@@ -710,7 +717,7 @@ export function useModManager() {
     refresh,
     toggleMod,
     deleteMod,
-    setExternalProfileMode,
+    setCommunityCompatibilityMode,
     addExternalMod,
     relinkExternalMod,
     addExternalDll,

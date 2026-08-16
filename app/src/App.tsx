@@ -84,7 +84,6 @@ function App() {
             busy={manager.busy}
             onToggle={manager.toggleMod}
             onDelete={manager.deleteMod}
-            onProfileMode={manager.setExternalProfileMode}
             onRelink={manager.relinkExternalMod}
             onRefresh={manager.refresh}
             onInstallZip={manager.installZip}
@@ -127,8 +126,10 @@ function App() {
             me3Path={manager.me3Path}
             launchExePath={manager.launchExePath}
             runtimeEnvironmentStatus={manager.runtimeEnvironmentStatus}
+            communityCompatibilityMode={manager.communityCompatibilityMode}
             busy={manager.busy}
             onSave={manager.savePaths}
+            onCommunityCompatibilityModeChange={manager.setCommunityCompatibilityMode}
           />
         )}
       </AppShell>

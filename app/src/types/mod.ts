@@ -74,6 +74,7 @@ export interface AppConfig {
   launchExePath: string;
   language: string;
   theme: string;
+  communityCompatibilityMode: boolean;
 }
 
 export type PageKey = "launch" | "mods" | "profiles" | "diagnostics" | "settings";
@@ -179,6 +180,7 @@ export interface SpecialModStatus {
   onlinefixInstalled: boolean;
   serverRedirectorConflicts: string[];
   nighterAvailable: boolean;
+  nighterLoaded: boolean;
   nighterPath: string;
   nighterConfigPath: string;
   missingGameFiles: string[];

@@ -8,7 +8,6 @@ interface ModCardProps {
   onToggle: (mod: ModInfo) => void;
   onDelete: (mod: ModInfo) => void;
   onConfigure: (mod: ModInfo) => void;
-  onProfileMode: (mod: ModInfo) => void;
   onRelink: (mod: ModInfo) => void;
 }
 
@@ -18,16 +17,10 @@ export function ModCard({
   onToggle,
   onDelete,
   onConfigure,
-  onProfileMode,
   onRelink,
 }: ModCardProps) {
   const isExternal = mod.source === "external_package" || mod.source === "external_native";
   const hasConfig = mod.configFiles.length > 0;
-  const canChangeProfileMode =
-    mod.source === "external_package" &&
-    mod.authorProfile &&
-    (mod.networkBackend === "server_redirector" ||
-      mod.profileMode === "mmv_seamless_community");
   const clothing = mod.clothing;
 
   return (
@@ -155,17 +148,6 @@ export function ModCard({
             </div>
           </details>
 
-          {canChangeProfileMode && (
-            <button
-              type="button"
-              onClick={() => onProfileMode(mod)}
-              className="mt-3 rounded-lg border border-warning/35 bg-warning/10 px-3 py-1.5 text-xs font-semibold text-warning transition-colors hover:border-warning/60 hover:bg-warning/15"
-            >
-              {mod.profileMode === "mmv_seamless_community"
-                ? "恢复作者 Server Redirector"
-                : "改用社区 Seamless 兼容"}
-            </button>
-          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">

@@ -1,6 +1,6 @@
 # 当前状态与新会话交接
 
-更新时间：2026-08-02
+更新时间：2026-08-16
 当前分支：`master`
 当前发布基线：`v0.2.0`（第二版，2026-08-02）
 
@@ -34,6 +34,28 @@
 用户的无关变更，除非用户明确决定如何处理。
 
 ## 本轮已完成
+
+### 2026-08-16 v0.2.1 补丁版打包
+
+- 统一 `app/package.json`、`package-lock.json`、Rust crate 与 Tauri bundle 版本为 `0.2.1`。
+- 已构建并写入 `release/v0.2.1/`：NSIS `nightreign-mod-manager_0.2.1_x64-setup.exe` 与中文 MSI
+  `nightreign-mod-manager_0.2.1_x64_zh-CN.msi`，校验值见同目录 `SHA256SUMS.txt`。
+- 前端 lint/生产构建、Rust 格式、Clippy、check 与测试均通过（48 passed、9 ignored）。MSI 管理提取与
+  NSIS 隔离静默安装均返回 0，提取的主程序版本均为 `0.2.1`，且两种包中的中文快捷方式内容一致。
+- 本地发布产物尚未创建 GitHub Release 或推送远端；需要公开发布时再创建 `v0.2.1` 标签和 Release。
+
+### 2026-08-16 训练场（Boss Arena）多 Profile 兼容
+
+- 只读检查用户的 `Game\\mods\\训练场mod` 后确认，目录内的 `Launch NR Boss Arena (Sandbox).me3` 与
+  `Launch NR Boss Arena (Progression).me3` 是作者明确提供的互斥启动方案，而不是可叠加内容；两者的
+  `savefile` 不同，因此旧实现把二者合并时会报“多个作者启动配置的根字段冲突”，造成无法生成启动配置。
+- 生成器现在先尝试保持多份作者 Profile 的原有合并语义。只有出现根字段冲突、且恰好一份候选 Profile
+  只包含一份 `regulation.bin` 时，才自动采用这一份并在启动前检查中显示实际采用的文件名；其它多候选
+  情况继续明确阻止，绝不按文件名静默挑选。
+- 本地训练场样本已只读验证为采用 Sandbox Profile（单一 `mod\\regulation.bin`）；Progression 同时声明
+  `mod\\regulation.bin` 与 `mod\\Progression\\regulation.bin`，仍会受全局“多份玩法数据文件硬阻止”保护。
+  作者 README 只声明 Steam 正版支持；管理器的 Spacewar + Seamless 运行环境能生成该启动计划，但不得将其
+  描述为作者已支持或已完成实际游戏回归。
 
 ### 2026-08-02 v0.2.0 第二版发布
 
@@ -115,6 +137,13 @@ SHA-256 `103CF4A60E44F9754529ABE494F77C2043FA3301C54DC85F94064994ACD1A836`；包
 `tools/build-skin-overhaul-602-zhocn-item.ps1`；原始 602 和 Skin 文件没有改动。启用测试时
 只能启用此派生中文层，原始 602/559 和其它完整中文层保持停用。页脚尚待下一次实际进游戏
 截图确认，且本地名称显示不能替代联机中文层验收。
+
+2026-08-09 已完成 Nexus Mods 发布与收益调研，详见
+`docs/research/2026-08-09-skin-overhaul-602-nexus-publication.md`。当前成品暂不上传：602 的
+公开权限支持署名后使用文本资产并允许 DP，但 Skin Overhaul 要求使用资产前取得许可，且
+默认禁止相关 Mod 获取 DP；必须先取得 Skin 权利方书面同意，未获专门 DP 授权时保持
+Donation Points 关闭，直接捐赠在许可边界确认前也暂不启用。低风险备选是只发布名称映射
+和本地构建脚本，但仍建议先取得 Skin 作者认可。
 
 MMV + Skin 仍需要通过可审计的参数级合并生成适配当前 MMV 2.1.7.1 的唯一
 `regulation.bin`，不得用加载顺序或简单覆盖冒充合并。
@@ -265,11 +294,18 @@ MMV + Skin 仍需要通过可审计的参数级合并生成适配当前 MMV 2.1.
 - 真实 MMV + Weapons + 602 + nrsc 目录已完成 2.74 GB 全量读取：MMV package
   1,439 个文件、2,740,381,704 bytes，树指纹
   `ECCCD4F2614E7F364F169A64B1EFEE7CB1ED6F08D8E53660C46EB736FA9A3F72`；
-  602 package 2 个文件、324,608 bytes，树指纹
+602 package 2 个文件、324,608 bytes，树指纹
   `3790898ACC858DFBD8FC6E4AECB64D0391573FAA4E0FA4FB0492C2D358000219`。
   最终脱敏清单仅 2,310 bytes，总体指纹
   `4AEAC4B791976335C1CD44C0F608BF6585072373C7194156004D232D27DD1BF0`，
   没有绝对路径；完整计算耗时约 81 秒。
+
+## 2026-08-10 视频反馈修复
+
+- 设置页新增始终可见的“MMV 社区兼容方式”专用按钮；它是持久化的全局选择，不需要先安装或注册 MMV。后续识别到带 Server Redirector 的外部 MMV 作者启动配置时会自动采用社区生成副本，旧逐 Mod `profile_mode` 继续兼容并在用户明确切换后迁移到全局设置。
+- 移除 Mod 卡片上的社区模式切换入口，避免同一行为出现两套权限来源；原作者 `.me3`、DLL、package 和 `regulation.bin` 仍保持只读。
+- 深夜解锁状态改为读取当前生成启动计划中的 native。本机问题样本实际位于 `Game\mods\深夜解锁mod\nighter.dll`，已用同样的嵌套/计划结构补充自动化回归，不再只检查固定的 `Game\mods\nighter.dll`；界面同时区分“本次启动会加载”和“已检测到但未进入本次启动配置”。
+- 本轮未启动游戏，也未修改当前 Mod、存档或联机文件。验证通过：`cargo fmt --all -- --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo check`、`cargo test`（47 passed、8 ignored）、`npm run build`、`npm run lint`。
 
 ## 2026-07-31 验证结果
 

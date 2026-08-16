@@ -8,6 +8,7 @@ interface SettingsPageProps {
   me3Path: string;
   launchExePath: string;
   runtimeEnvironmentStatus: RuntimeEnvironmentStatus | null;
+  communityCompatibilityMode: boolean;
   busy: boolean;
   onSave: (
     gamePath: string,
@@ -15,6 +16,7 @@ interface SettingsPageProps {
     launchExePath: string,
     runtimeEnvironment: RuntimeEnvironment
   ) => Promise<void>;
+  onCommunityCompatibilityModeChange: (enabled: boolean) => void;
 }
 
 export function SettingsPage({
@@ -22,8 +24,10 @@ export function SettingsPage({
   me3Path,
   launchExePath,
   runtimeEnvironmentStatus,
+  communityCompatibilityMode,
   busy,
   onSave,
+  onCommunityCompatibilityModeChange,
 }: SettingsPageProps) {
   const [draftGamePath, setDraftGamePath] = useState(gamePath);
   const [draftMe3Path, setDraftMe3Path] = useState(me3Path);
@@ -118,6 +122,42 @@ export function SettingsPage({
             </p>
           </div>
 
+          <div className="mt-5 border-t border-border pt-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-text-primary">MMV 社区兼容方式</h3>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                      communityCompatibilityMode
+                        ? "border-warning/30 bg-warning/10 text-warning"
+                        : "border-border bg-surface text-text-muted"
+                    }`}
+                  >
+                    {communityCompatibilityMode ? "已启用" : "使用作者方式"}
+                  </span>
+                </div>
+                <p className="mt-2 max-w-2xl text-xs leading-5 text-text-muted">
+                  这是独立的全局设置，不需要先安装 MMV。启用后，今后注册或启用符合条件的作者启动配置时，管理器会在生成副本中改用社区联机插件；原始 Mod 和作者文件保持不变。
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  onCommunityCompatibilityModeChange(!communityCompatibilityMode)
+                }
+                className={`shrink-0 rounded-lg border px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                  communityCompatibilityMode
+                    ? "border-border bg-surface text-text-secondary hover:text-text-primary"
+                    : "border-warning/35 bg-warning/10 text-warning hover:border-warning/60 hover:bg-warning/15"
+                }`}
+              >
+                {communityCompatibilityMode ? "恢复作者联机方式" : "启用社区兼容方式"}
+              </button>
+            </div>
+          </div>
+
           <div className="mt-5 flex justify-end border-t border-border pt-4">
             <button
               type="button"
@@ -144,6 +184,7 @@ export function SettingsPage({
             <li className="flex gap-3"><RuleNumber value="01" /><span>选择游戏安装目录中的 <b className="text-text-secondary">Game</b> 文件夹；管理器会自动检查游戏主程序（nightreign.exe）。</span></li>
             <li className="flex gap-3"><RuleNumber value="02" /><span>ME3 可以选择根目录，也可以直接选择 <b className="text-text-secondary">bin</b> 文件夹。</span></li>
             <li className="flex gap-3"><RuleNumber value="03" /><span>不确定联机方式时先保持“自动检测”；不要把两种联机文件混放到同一个 Game 目录。</span></li>
+            <li className="flex gap-3"><RuleNumber value="04" /><span>社区兼容方式可以提前设置；只有检测到符合条件的 MMV 作者启动配置时才会实际改写生成副本。</span></li>
           </ol>
         </aside>
       </div>

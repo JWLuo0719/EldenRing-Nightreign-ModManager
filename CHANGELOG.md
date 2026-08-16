@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-16
+
+### Added
+
+- 设置页新增始终可见的 MMV 社区兼容模式开关；不再要求先安装或注册特定 Mod 才能预先设置。
+- 启动前检查现在显示实际采用的作者 `.me3` 文件名，便于确认启动计划而非仅看 Mod 卡片启用状态。
+
+### Fixed
+
+- 修复深夜解锁状态只检查固定根目录的问题；现在按本次生成启动计划中的 `nighter.dll` 判断是否会加载，并能区分“已安装”与“本次会加载”。
+- 修复训练场（Boss Arena）同目录 Sandbox/Progression 双 Profile 被错误叠加而无法生成启动配置的问题；仅在恰好一个候选满足单一 `regulation.bin` 门槛时自动采用该安全 Profile。
+
 ## [0.2.0] - 2026-08-02
 
 ### Added
@@ -84,6 +96,7 @@
 - 修复 Windows `\\?\` 路径前缀导致外部 Mod 加载不稳定的问题。
 - 添加启动前进程保护，避免残留 `nightreign.exe` 或 `me3-launcher.exe` 抢占文件句柄。
 
-[Unreleased]: https://github.com/JWLuo0719/EldenRing-Nightreign-ModManager/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/JWLuo0719/EldenRing-Nightreign-ModManager/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/JWLuo0719/EldenRing-Nightreign-ModManager/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/JWLuo0719/EldenRing-Nightreign-ModManager/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JWLuo0719/EldenRing-Nightreign-ModManager/releases/tag/v0.1.0
